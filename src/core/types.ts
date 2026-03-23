@@ -212,3 +212,4 @@ export interface RunResult {
   nodeOutputs: Record<string, unknown>;
   error?: string;
 }
+// v0.1.1
