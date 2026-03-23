@@ -1,0 +1,50 @@
+{
+  "name": "@supra/automation-builder",
+  "version": "0.1.0",
+  "description": "Visual drag-and-drop workflow automation builder — pluggable triggers, actions, and logic nodes powered by React Flow",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./tailwind": "./tailwind.config.ts"
+  },
+  "files": [
+    "dist",
+    "tailwind.config.ts"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@xyflow/react": "^12.0.0",
+    "lucide-react": ">=0.300.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@xyflow/react": "^12.10.1",
+    "autoprefixer": "^10.4.20",
+    "lucide-react": "^0.475.0",
+    "postcss": "^8.5.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^3.4.17",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.3"
+  }
+}
