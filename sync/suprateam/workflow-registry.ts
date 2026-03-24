@@ -2,7 +2,7 @@
  * CRM-specific node registry for the automation builder.
  * Defines SupraTeam's triggers, actions, config schemas, and icons.
  */
-import type { NodeRegistry, NodePaletteItem } from "../packages/automation-builder/dist/index";
+import type { NodeRegistry, NodePaletteItem, ConfigFieldDef } from "../packages/automation-builder/dist/index";
 import {
   ArrowRightLeft,
   PlusCircle,
@@ -39,12 +39,11 @@ import {
   FilePlus,
 } from "lucide-react";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyField = any; // async_select fields use extended props not in base ConfigFieldDef
+// ConfigFieldDef now natively supports optionsUrl + mapOption — no cast needed
 
 const BOARD_OPTIONS = [{ value: "", label: "Any" }, { value: "BD", label: "BD" }, { value: "Marketing", label: "Marketing" }, { value: "Admin", label: "Admin" }];
 const stageMapOption = (item: Record<string, unknown>) => ({ value: String((item as { name?: string }).name ?? ""), label: String((item as { name?: string }).name ?? "") });
-const groupMapOption = (item: Record<string, unknown>) => ({ value: String((item as { chat_id?: unknown }).chat_id ?? ""), label: String((item as { group_name?: string }).group_name ?? "Unknown group") });
+const groupMapOption = (item: Record<string, unknown>) => ({ value: String((item as { telegram_group_id?: unknown }).telegram_group_id ?? (item as { chat_id?: unknown }).chat_id ?? ""), label: String((item as { group_name?: string }).group_name ?? "Unknown group") });
 const teamMapOption = (item: Record<string, unknown>) => { const u = item as { id?: string; display_name?: string; email?: string; crm_role?: string }; return { value: u.id || "", label: `${u.display_name || u.email || "Unknown"}${u.crm_role ? ` (${u.crm_role})` : ""}` }; };
 const contactMapOption = (item: Record<string, unknown>) => { const c = item as { email?: string; name?: string; company?: string }; return { value: c.email || "", label: `${c.name || "Unknown"}${c.email ? ` (${c.email})` : ""}${c.company ? ` — ${c.company}` : ""}` }; };
 const slackChannelMapOption = (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: `#${(item as { name?: string }).name ?? "unknown"}` });
@@ -107,8 +106,8 @@ export const CRM_REGISTRY: NodeRegistry = {
     deal_stage_change: {
       subType: "deal_stage_change",
       configFields: [
-        { key: "from_stage", label: "From stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption } as AnyField,
-        { key: "to_stage", label: "To stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption } as AnyField,
+        { key: "from_stage", label: "From stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption },
+        { key: "to_stage", label: "To stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption },
         { key: "board_type", label: "Board type (optional)", type: "select", options: BOARD_OPTIONS },
       ],
     },
@@ -128,7 +127,7 @@ export const CRM_REGISTRY: NodeRegistry = {
     tg_message: {
       subType: "tg_message",
       configFields: [
-        { key: "chat_id", label: "Telegram Group", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: groupMapOption } as AnyField,
+        { key: "chat_id", label: "Telegram Group", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: groupMapOption },
         { key: "keyword", label: "Keyword match (optional)", type: "text", placeholder: "e.g. interested, urgent" },
       ],
       infoText: "Fires when a message is received in the selected Telegram group. Optionally filter by keyword.",
@@ -148,7 +147,7 @@ export const CRM_REGISTRY: NodeRegistry = {
       configFields: [
         { key: "stale_days", label: "Days without movement", type: "number", defaultValue: 7 },
         { key: "board_type", label: "Board type (optional)", type: "select", options: BOARD_OPTIONS },
-        { key: "stage", label: "Stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption } as AnyField,
+        { key: "stage", label: "Stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption },
       ],
       infoText: "Fires when a deal stays in the same stage for the specified number of days.",
     },
@@ -162,21 +161,21 @@ export const CRM_REGISTRY: NodeRegistry = {
     task_overdue: {
       subType: "task_overdue",
       configFields: [
-        { key: "assigned_to", label: "Assigned to (optional)", type: "async_select", placeholder: "Any team member", optionsUrl: "/api/team", mapOption: teamMapOption } as AnyField,
+        { key: "assigned_to", label: "Assigned to (optional)", type: "async_select", placeholder: "Any team member", optionsUrl: "/api/team", mapOption: teamMapOption },
         { key: "priority", label: "Priority (optional)", type: "select", options: [{ value: "", label: "Any" }, { value: "urgent", label: "Urgent" }, { value: "high", label: "High" }, { value: "normal", label: "Normal" }, { value: "low", label: "Low" }] },
       ],
     },
     tg_member_joined: {
       subType: "tg_member_joined",
       configFields: [
-        { key: "chat_id", label: "Telegram Group (optional)", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: groupMapOption } as AnyField,
+        { key: "chat_id", label: "Telegram Group (optional)", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: groupMapOption },
       ],
       infoText: "Fires when a new user joins a Telegram group managed by the bot.",
     },
     tg_member_left: {
       subType: "tg_member_left",
       configFields: [
-        { key: "chat_id", label: "Telegram Group (optional)", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: groupMapOption } as AnyField,
+        { key: "chat_id", label: "Telegram Group (optional)", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: groupMapOption },
       ],
       infoText: "Fires when a user leaves or is removed from a Telegram group.",
     },
@@ -210,14 +209,14 @@ export const CRM_REGISTRY: NodeRegistry = {
       subType: "send_telegram",
       configFields: [
         { key: "message", label: "Message template", type: "textarea", placeholder: "Use {{deal_name}}, {{stage}}, {{value}}" },
-        { key: "chat_id", label: "Send to group (optional)", type: "async_select", placeholder: "Default: deal's linked chat", optionsUrl: "/api/groups", mapOption: groupMapOption } as AnyField,
+        { key: "chat_id", label: "Send to group (optional)", type: "async_select", placeholder: "Default: deal's linked chat", optionsUrl: "/api/groups", mapOption: groupMapOption },
       ],
       infoText: "Variables: {{deal_name}}, {{stage}}, {{value}}, {{contact_name}}, {{company}}",
     },
     send_email: {
       subType: "send_email",
       configFields: [
-        { key: "to", label: "To (optional override)", type: "async_select", placeholder: "Default: contact email", optionsUrl: "/api/contacts", mapOption: contactMapOption } as AnyField,
+        { key: "to", label: "To (optional override)", type: "async_select", placeholder: "Default: contact email", optionsUrl: "/api/contacts", mapOption: contactMapOption },
         { key: "subject", label: "Subject", type: "text", placeholder: "Email subject" },
         { key: "body", label: "Body", type: "textarea", placeholder: "Email body…" },
       ],
@@ -225,8 +224,8 @@ export const CRM_REGISTRY: NodeRegistry = {
     send_slack: {
       subType: "send_slack",
       configFields: [
-        { key: "channel_id", label: "Slack Channel", type: "async_select", placeholder: "Select a channel…", optionsUrl: "/api/slack/channels", mapOption: slackChannelMapOption } as AnyField,
-        { key: "mention_user_id", label: "@Mention User (optional)", type: "async_select", placeholder: "Select a user…", optionsUrl: "/api/slack/users", mapOption: slackUserMapOption } as AnyField,
+        { key: "channel_id", label: "Slack Channel", type: "async_select", placeholder: "Select a channel…", optionsUrl: "/api/slack/channels", mapOption: slackChannelMapOption },
+        { key: "mention_user_id", label: "@Mention User (optional)", type: "async_select", placeholder: "Select a user…", optionsUrl: "/api/slack/users", mapOption: slackUserMapOption },
         { key: "message", label: "Message template", type: "textarea", placeholder: "*[{{group_name}}]* {{sender_name}}: {{message_text}}\n<{{message_link}}|View in Telegram>" },
       ],
       infoText: "Sends to your connected Slack workspace. Variables: {{sender_name}}, {{message_text}}, {{group_name}}, {{message_link}}",
@@ -248,15 +247,15 @@ export const CRM_REGISTRY: NodeRegistry = {
     assign_deal: {
       subType: "assign_deal",
       configFields: [
-        { key: "assign_to", label: "Assign to", type: "async_select", placeholder: "Select team member…", optionsUrl: "/api/team", mapOption: teamMapOption } as AnyField,
+        { key: "assign_to", label: "Assign to", type: "async_select", placeholder: "Select team member…", optionsUrl: "/api/team", mapOption: teamMapOption },
       ],
-      infoText: "Tip: Use {{current_user}} in a text override to assign to the workflow creator.",
     },
     create_task: {
       subType: "create_task",
       configFields: [
         { key: "title", label: "Task title", type: "text", placeholder: "e.g. Follow up on {{deal_name}}" },
         { key: "description", label: "Description (optional)", type: "textarea", placeholder: "Task details…" },
+        { key: "assigned_to", label: "Assign to (optional)", type: "async_select", placeholder: "Select team member…", optionsUrl: "/api/team", mapOption: teamMapOption },
         { key: "due_hours", label: "Due in (hours)", type: "number", defaultValue: 24 },
       ],
     },
@@ -281,11 +280,12 @@ export const CRM_REGISTRY: NodeRegistry = {
     send_broadcast: {
       subType: "send_broadcast",
       configFields: [
+        { key: "chat_id", label: "Telegram Group (optional)", type: "async_select", placeholder: "All groups with slug", optionsUrl: "/api/groups", mapOption: groupMapOption },
         { key: "slug", label: "Slug filter", type: "text", placeholder: "e.g. partners, ecosystem" },
         { key: "message", label: "Message", type: "textarea", placeholder: "Broadcast message…" },
         { key: "pin", label: "Pin message", type: "select", options: [{ value: "false", label: "No" }, { value: "true", label: "Yes" }] },
       ],
-      infoText: "Sends to all TG groups tagged with the specified slug.",
+      infoText: "Sends to all TG groups tagged with the specified slug, or a specific group.",
     },
     add_tag: {
       subType: "add_tag",
@@ -314,7 +314,7 @@ export const CRM_REGISTRY: NodeRegistry = {
     add_to_sequence: {
       subType: "add_to_sequence",
       configFields: [
-        { key: "sequence_id", label: "Outreach Sequence", type: "async_select", placeholder: "Select sequence…", optionsUrl: "/api/outreach/sequences", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: String((item as { name?: string }).name ?? "Unknown") }) } as AnyField,
+        { key: "sequence_id", label: "Outreach Sequence", type: "async_select", placeholder: "Select sequence…", optionsUrl: "/api/outreach/sequences", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: String((item as { name?: string }).name ?? "Unknown") }) },
         { key: "start_step", label: "Start at step", type: "number", defaultValue: 1 },
       ],
       infoText: "Enrolls the deal's contact into the selected outreach sequence.",
@@ -322,7 +322,7 @@ export const CRM_REGISTRY: NodeRegistry = {
     remove_from_sequence: {
       subType: "remove_from_sequence",
       configFields: [
-        { key: "sequence_id", label: "Outreach Sequence", type: "async_select", placeholder: "Select sequence…", optionsUrl: "/api/outreach/sequences", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: String((item as { name?: string }).name ?? "Unknown") }) } as AnyField,
+        { key: "sequence_id", label: "Outreach Sequence", type: "async_select", placeholder: "Select sequence…", optionsUrl: "/api/outreach/sequences", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: String((item as { name?: string }).name ?? "Unknown") }) },
       ],
       infoText: "Removes the contact from the specified outreach sequence.",
     },
@@ -346,19 +346,20 @@ export const CRM_REGISTRY: NodeRegistry = {
       subType: "tg_manage_access",
       configFields: [
         { key: "action", label: "Action", type: "select", options: [{ value: "add", label: "Add to groups" }, { value: "remove", label: "Remove from groups" }] },
-        { key: "slug", label: "Slug", type: "text", placeholder: "e.g. partners" },
+        { key: "chat_id", label: "Specific group (optional)", type: "async_select", placeholder: "Or use slug below", optionsUrl: "/api/groups", mapOption: groupMapOption },
+        { key: "slug", label: "Slug (optional)", type: "text", placeholder: "e.g. partners" },
         { key: "telegram_user_id", label: "Telegram User ID (optional)", type: "text", placeholder: "Default: contact's TG ID. Or use {{contact_tg_id}}" },
       ],
-      infoText: "Adds or removes a user from all Telegram groups tagged with the specified slug.",
+      infoText: "Adds or removes a user from all Telegram groups tagged with the specified slug, or a specific group.",
     },
     create_deal: {
       subType: "create_deal",
       configFields: [
         { key: "name", label: "Deal name", type: "text", placeholder: "e.g. {{contact_name}} — Partnership" },
         { key: "board_type", label: "Board", type: "select", options: [{ value: "BD", label: "BD" }, { value: "Marketing", label: "Marketing" }, { value: "Admin", label: "Admin" }] },
-        { key: "stage", label: "Initial stage", type: "async_select", placeholder: "First stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption } as AnyField,
+        { key: "stage", label: "Initial stage", type: "async_select", placeholder: "First stage", optionsUrl: "/api/pipeline", mapOption: stageMapOption },
         { key: "value", label: "Value (optional)", type: "number", placeholder: "0" },
-        { key: "assign_to", label: "Assign to (optional)", type: "async_select", placeholder: "Select team member…", optionsUrl: "/api/team", mapOption: teamMapOption } as AnyField,
+        { key: "assign_to", label: "Assign to (optional)", type: "async_select", placeholder: "Select team member…", optionsUrl: "/api/team", mapOption: teamMapOption },
       ],
       infoText: "Creates a new deal. Use merge variables in the name: {{contact_name}}, {{company}}, {{sender_name}}.",
     },
