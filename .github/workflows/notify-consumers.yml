@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        repo: [SupraAgent/SupraTeam, SupraAgent/SupraLoop]
+        repo: [SupraAgent/SupraTeam, SupraAgent/SupraLoop, SupraAgent/Auto-Purchaser]
     steps:
       - name: Get commit info
         id: info

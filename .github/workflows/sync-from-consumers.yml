@@ -2,7 +2,7 @@ name: Sync node definitions from consumer repos
 
 on:
   repository_dispatch:
-    types: [suprateam-update, supraloop-update]
+    types: [suprateam-update, supraloop-update, autopurchaser-update]
   workflow_dispatch:
     inputs:
       consumer:
@@ -12,6 +12,7 @@ on:
         options:
           - suprateam
           - supraloop
+          - autopurchaser
           - all
 
 jobs:
@@ -26,6 +27,9 @@ jobs:
           - name: supraloop
             repo: SupraAgent/SupraLoop
             source_files: "src/lib/flow-templates.ts,src/components/visual-builder/node-palette.tsx"
+          - name: autopurchaser
+            repo: SupraAgent/Auto-Purchaser
+            source_files: "lib/deal-registry.ts,lib/deal-actions.ts"
       fail-fast: false
     # Skip matrix entries that don't match the dispatch event
     # For repository_dispatch: only run the matching consumer

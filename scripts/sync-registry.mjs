@@ -42,6 +42,10 @@ const SEARCH_PATTERNS = {
     "src/lib/flow-templates.ts",
     "src/components/visual-builder/node-palette.tsx",
   ],
+  autopurchaser: [
+    "lib/deal-registry.ts",
+    "lib/deal-actions.ts",
+  ],
 };
 
 const patterns = SEARCH_PATTERNS[consumerName];

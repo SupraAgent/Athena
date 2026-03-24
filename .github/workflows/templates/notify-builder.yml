@@ -26,6 +26,10 @@ on:
       - "src/lib/flow-templates.ts"
       - "src/components/visual-builder/nodes/**"
       - "src/components/visual-builder/node-palette.tsx"
+      # ── Auto-Purchaser paths (remove if not applicable) ──
+      - "lib/deal-registry.ts"
+      - "lib/deal-actions.ts"
+      - "lib/templates.ts"
 
 jobs:
   notify:
@@ -40,6 +44,7 @@ jobs:
           case "$REPO_NAME" in
             */SupraTeam)  CONSUMER="suprateam" ;;
             */SupraLoop)  CONSUMER="supraloop" ;;
+            */Auto-Purchaser) CONSUMER="autopurchaser" ;;
             *)            CONSUMER="unknown" ;;
           esac
 
