@@ -22,6 +22,15 @@ export {
   SUPRALOOP_CONDITION_FIELDS,
 } from "./supraloop";
 
+export {
+  AUTOPURCHASER_REGISTRY,
+  AUTOPURCHASER_TRIGGERS,
+  AUTOPURCHASER_ACTIONS,
+  AUTOPURCHASER_TRIGGER_CONFIGS,
+  AUTOPURCHASER_ACTION_CONFIGS,
+  AUTOPURCHASER_CONDITION_FIELDS,
+} from "./autopurchaser";
+
 /**
  * Merge multiple NodeRegistry objects into one.
  * Useful when a consumer wants to combine registries from multiple sources.
