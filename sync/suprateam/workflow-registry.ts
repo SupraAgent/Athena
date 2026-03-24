@@ -22,6 +22,9 @@ import {
   Hash,
 } from "lucide-react";
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyField = any; // async_select fields use extended props not in base ConfigFieldDef
+
 // ── Palette items ───────────────────────────────────────────────
 
 export const CRM_TRIGGERS: NodePaletteItem[] = [
@@ -55,8 +58,8 @@ export const CRM_REGISTRY: NodeRegistry = {
     deal_stage_change: {
       subType: "deal_stage_change",
       configFields: [
-        { key: "from_stage", label: "From stage (optional)", type: "text", placeholder: "Any stage" },
-        { key: "to_stage", label: "To stage (optional)", type: "text", placeholder: "Any stage" },
+        { key: "from_stage", label: "From stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { name?: string }).name ?? ""), label: String((item as { name?: string }).name ?? "") }) } as AnyField,
+        { key: "to_stage", label: "To stage (optional)", type: "async_select", placeholder: "Any stage", optionsUrl: "/api/pipeline", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { name?: string }).name ?? ""), label: String((item as { name?: string }).name ?? "") }) } as AnyField,
         { key: "board_type", label: "Board type (optional)", type: "select", options: [{ value: "", label: "Any" }, { value: "BD", label: "BD" }, { value: "Marketing", label: "Marketing" }, { value: "Admin", label: "Admin" }] },
       ],
     },
@@ -76,9 +79,10 @@ export const CRM_REGISTRY: NodeRegistry = {
     tg_message: {
       subType: "tg_message",
       configFields: [
-        { key: "chat_id", label: "Chat ID (optional)", type: "text", placeholder: "Any chat" },
-        { key: "keyword", label: "Keyword match", type: "text", placeholder: "e.g. interested" },
+        { key: "chat_id", label: "Telegram Group", type: "async_select", placeholder: "Any group", optionsUrl: "/api/groups", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { chat_id?: unknown }).chat_id ?? ""), label: String((item as { group_name?: string }).group_name ?? "Unknown group") }) } as AnyField,
+        { key: "keyword", label: "Keyword match (optional)", type: "text", placeholder: "e.g. interested, urgent" },
       ],
+      infoText: "Fires when a message is received in the selected Telegram group. Optionally filter by keyword.",
     },
     calendar_event: {
       subType: "calendar_event",
@@ -104,13 +108,14 @@ export const CRM_REGISTRY: NodeRegistry = {
       subType: "send_telegram",
       configFields: [
         { key: "message", label: "Message template", type: "textarea", placeholder: "Use {{deal_name}}, {{stage}}, {{value}}" },
-        { key: "chat_id", label: "Chat ID override (optional)", type: "text", placeholder: "Default: deal's linked chat" },
+        { key: "chat_id", label: "Send to group (optional)", type: "async_select", placeholder: "Default: deal's linked chat", optionsUrl: "/api/groups", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { chat_id?: unknown }).chat_id ?? ""), label: String((item as { group_name?: string }).group_name ?? "Unknown group") }) } as AnyField,
       ],
+      infoText: "Variables: {{deal_name}}, {{stage}}, {{value}}, {{contact_name}}, {{company}}",
     },
     send_email: {
       subType: "send_email",
       configFields: [
-        { key: "to", label: "To (optional override)", type: "text", placeholder: "Default: contact email" },
+        { key: "to", label: "To (optional override)", type: "async_select", placeholder: "Default: contact email", optionsUrl: "/api/contacts", mapOption: (item: Record<string, unknown>) => { const c = item as { email?: string; name?: string; company?: string }; return { value: c.email || "", label: `${c.name || "Unknown"}${c.email ? ` (${c.email})` : ""}${c.company ? ` — ${c.company}` : ""}` }; } } as AnyField,
         { key: "subject", label: "Subject", type: "text", placeholder: "Email subject" },
         { key: "body", label: "Body", type: "textarea", placeholder: "Email body…" },
       ],
@@ -118,11 +123,11 @@ export const CRM_REGISTRY: NodeRegistry = {
     send_slack: {
       subType: "send_slack",
       configFields: [
-        { key: "channel_id", label: "Slack Channel", type: "text", placeholder: "Channel ID (from /api/slack/channels)" },
-        { key: "mention_user_id", label: "@Mention User (optional)", type: "text", placeholder: "Slack user ID" },
+        { key: "channel_id", label: "Slack Channel", type: "async_select", placeholder: "Select a channel…", optionsUrl: "/api/slack/channels", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: `#${(item as { name?: string }).name ?? "unknown"}` }) } as AnyField,
+        { key: "mention_user_id", label: "@Mention User (optional)", type: "async_select", placeholder: "Select a user…", optionsUrl: "/api/slack/users", mapOption: (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: `@${(item as { display_name?: string; name?: string }).display_name || (item as { name?: string }).name || "unknown"}` }) } as AnyField,
         { key: "message", label: "Message template", type: "textarea", placeholder: "*[{{group_name}}]* {{sender_name}}: {{message_text}}\n<{{message_link}}|View in Telegram>" },
       ],
-      infoText: "Variables: {{sender_name}}, {{message_text}}, {{group_name}}, {{message_link}}",
+      infoText: "Sends to your connected Slack workspace. Variables: {{sender_name}}, {{message_text}}, {{group_name}}, {{message_link}}",
     },
     update_deal: {
       subType: "update_deal",
@@ -141,8 +146,9 @@ export const CRM_REGISTRY: NodeRegistry = {
     assign_deal: {
       subType: "assign_deal",
       configFields: [
-        { key: "assign_to", label: "Assign to (user ID)", type: "text", placeholder: 'User ID or "{{current_user}}"' },
+        { key: "assign_to", label: "Assign to", type: "async_select", placeholder: "Select team member…", optionsUrl: "/api/team", mapOption: (item: Record<string, unknown>) => { const u = item as { id?: string; display_name?: string; email?: string; crm_role?: string }; return { value: u.id || "", label: `${u.display_name || u.email || "Unknown"}${u.crm_role ? ` (${u.crm_role})` : ""}` }; } } as AnyField,
       ],
+      infoText: "Tip: Use {{current_user}} in a text override to assign to the workflow creator.",
     },
     create_task: {
       subType: "create_task",
