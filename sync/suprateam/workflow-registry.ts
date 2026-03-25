@@ -46,8 +46,8 @@ const stageMapOption = (item: Record<string, unknown>) => ({ value: String((item
 const groupMapOption = (item: Record<string, unknown>) => ({ value: String((item as { telegram_group_id?: unknown }).telegram_group_id ?? (item as { chat_id?: unknown }).chat_id ?? ""), label: String((item as { group_name?: string }).group_name ?? "Unknown group") });
 const teamMapOption = (item: Record<string, unknown>) => { const u = item as { id?: string; display_name?: string; email?: string; crm_role?: string }; return { value: u.id || "", label: `${u.display_name || u.email || "Unknown"}${u.crm_role ? ` (${u.crm_role})` : ""}` }; };
 const contactMapOption = (item: Record<string, unknown>) => { const c = item as { email?: string; name?: string; company?: string }; return { value: c.email || "", label: `${c.name || "Unknown"}${c.email ? ` (${c.email})` : ""}${c.company ? ` — ${c.company}` : ""}` }; };
-const slackChannelMapOption = (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: `#${(item as { name?: string }).name ?? "unknown"}` });
-const slackUserMapOption = (item: Record<string, unknown>) => ({ value: String((item as { id?: string }).id ?? ""), label: `@${(item as { display_name?: string; name?: string }).display_name || (item as { name?: string }).name || "unknown"}` });
+const slackChannelMapOption = (item: Record<string, unknown>) => ({ value: String((item as { channel_id?: string }).channel_id ?? (item as { id?: string }).id ?? ""), label: `#${(item as { channel_name?: string }).channel_name ?? (item as { name?: string }).name ?? "unknown"}` });
+const slackUserMapOption = (item: Record<string, unknown>) => ({ value: String((item as { user_id?: string }).user_id ?? (item as { id?: string }).id ?? ""), label: `@${(item as { display_name?: string }).display_name ?? (item as { name?: string }).name ?? "unknown"}` });
 
 // ── Palette items ───────────────────────────────────────────────
 
@@ -224,9 +224,9 @@ export const CRM_REGISTRY: NodeRegistry = {
     send_slack: {
       subType: "send_slack",
       configFields: [
-        { key: "channel_id", label: "Slack Channel", type: "async_select", placeholder: "Select a channel…", optionsUrl: "/api/slack/channels", mapOption: slackChannelMapOption },
-        { key: "mention_user_id", label: "@Mention User (optional)", type: "async_select", placeholder: "Select a user…", optionsUrl: "/api/slack/users", mapOption: slackUserMapOption },
-        { key: "message", label: "Message template", type: "textarea", placeholder: "*[{{group_name}}]* {{sender_name}}: {{message_text}}\n<{{message_link}}|View in Telegram>" },
+        { key: "channel_id", label: "Slack Channel", type: "async_select", placeholder: "Select a channel…", optionsUrl: "/api/slack/saved-channels", mapOption: slackChannelMapOption, createUrl: "/api/slack/saved-channels", createFields: { valueKey: "channel_id", labelKey: "channel_name" } },
+        { key: "mention_user_id", label: "@Mention User (optional)", type: "async_select", placeholder: "Select a user…", optionsUrl: "/api/slack/saved-users", mapOption: slackUserMapOption, createUrl: "/api/slack/saved-users", createFields: { valueKey: "user_id", labelKey: "display_name" } },
+        { key: "message", label: "Message template", type: "textarea", placeholder: "*[{{group_name}}]* {{sender_name}}: {{message_text}}" },
       ],
       infoText: "Sends to your connected Slack workspace. Variables: {{sender_name}}, {{message_text}}, {{group_name}}, {{message_link}}",
     },
