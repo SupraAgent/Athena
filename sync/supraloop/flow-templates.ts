@@ -924,11 +924,18 @@ export const BUILT_IN_TEMPLATES: FlowTemplate[] = [
 
 // ── Template helpers ─────────────────────────────────────────────
 
-const STORAGE_KEY = "supraloop_custom_templates";
+const STORAGE_KEY = "supraloop:custom-templates";
 
 export function getCustomTemplates(): FlowTemplate[] {
   if (typeof window === "undefined") return [];
   try {
+    // Migrate from old key if present
+    const oldKey = "supraloop_custom_templates";
+    const old = localStorage.getItem(oldKey);
+    if (old && !localStorage.getItem(STORAGE_KEY)) {
+      localStorage.setItem(STORAGE_KEY, old);
+      localStorage.removeItem(oldKey);
+    }
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch {
@@ -980,6 +987,42 @@ export function getNextCopyName(baseName: string): string {
   return `${cleanBase}_${next}`;
 }
 
+// ── Starred Templates ──────────────────────────────────────────
+
+const STARRED_KEY = "supraloop:starred-templates";
+
+export function getStarredTemplateIds(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    // Migrate from old key if present
+    const oldKey = "supraloop-starred-templates";
+    const old = localStorage.getItem(oldKey);
+    if (old && !localStorage.getItem(STARRED_KEY)) {
+      localStorage.setItem(STARRED_KEY, old);
+      localStorage.removeItem(oldKey);
+    }
+    const raw = localStorage.getItem(STARRED_KEY);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function toggleStarTemplate(id: string): boolean {
+  const starred = getStarredTemplateIds();
+  if (starred.has(id)) {
+    starred.delete(id);
+  } else {
+    starred.add(id);
+  }
+  localStorage.setItem(STARRED_KEY, JSON.stringify([...starred]));
+  return starred.has(id);
+}
+
+export function isTemplateStarred(id: string): boolean {
+  return getStarredTemplateIds().has(id);
+}
+
 /** Create a copy of a template as a new custom template */
 export function copyTemplate(template: FlowTemplate): FlowTemplate {
   const name = getNextCopyName(template.name);
@@ -988,8 +1031,8 @@ export function copyTemplate(template: FlowTemplate): FlowTemplate {
     name,
     description: template.description,
     category: "custom",
-    nodes: template.nodes.map((n) => ({ ...n, data: { ...n.data } })),
-    edges: template.edges.map((e) => ({ ...e, ...(e.style ? { style: { ...e.style } } : {}) })),
+    nodes: JSON.parse(JSON.stringify(template.nodes)),
+    edges: JSON.parse(JSON.stringify(template.edges)),
     createdAt: new Date().toISOString().split("T")[0],
     isBuiltIn: false,
   };
