@@ -16,6 +16,7 @@ import {
   type NodeTypes,
   type OnConnect,
   ReactFlowProvider,
+  useReactFlow,
 } from "@xyflow/react";
 
 import { TriggerNode } from "./nodes/trigger-node";
@@ -25,6 +26,7 @@ import { DelayNode } from "./nodes/delay-node";
 import { NodeSidebar } from "./node-sidebar";
 import { NodeConfigPanel } from "./node-config-panel";
 import type { WorkflowNodeData } from "../core/types";
+import { autoLayout } from "../core/auto-layout";
 
 const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
@@ -63,7 +65,7 @@ function FlowCanvasInner({
   hideSidebar,
   hideConfigPanel,
 }: FlowCanvasProps) {
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState(autoLayout(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [selectedNode, setSelectedNode] = React.useState<Node | null>(null);
   const reactFlowWrapper = React.useRef<HTMLDivElement>(null);
