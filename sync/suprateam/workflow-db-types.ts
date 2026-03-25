@@ -29,3 +29,7 @@ export interface WorkflowRun {
   started_at: string;
   completed_at: string | null;
 }
+
+export interface WorkflowRunWithWorkflow extends WorkflowRun {
+  workflow: { id: string; name: string; trigger_type: string | null };
+}
