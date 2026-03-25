@@ -19,7 +19,7 @@ export function createSupabasePersistence(): PersistenceAdapter {
         .eq("id", workflowId)
         .single();
 
-      const { data: run } = await supabase
+      const { data: run, error } = await supabase
         .from("crm_workflow_runs")
         .insert({
           workflow_id: workflowId,
@@ -31,7 +31,11 @@ export function createSupabasePersistence(): PersistenceAdapter {
         .select("id")
         .single();
 
-      return run?.id ?? "";
+      if (error || !run) {
+        throw new Error(`Failed to create workflow run: ${error?.message ?? "unknown error"}`);
+      }
+
+      return run.id;
     },
 
     async updateRun(
@@ -55,19 +59,22 @@ export function createSupabasePersistence(): PersistenceAdapter {
         update.current_node_id = currentNodeId;
       }
 
+      let workflowId: string | null = null;
+
       if (status === "completed" || status === "failed") {
         update.completed_at = new Date().toISOString();
 
-        // Compute and store duration_ms
+        // Fetch started_at and workflow_id in one query
         const { data: run } = await supabase
           .from("crm_workflow_runs")
-          .select("started_at")
+          .select("started_at, workflow_id")
           .eq("id", runId)
           .single();
 
         if (run?.started_at) {
           update.duration_ms = Date.now() - new Date(run.started_at).getTime();
         }
+        workflowId = run?.workflow_id ?? null;
 
         // Classify failure type
         if (status === "failed" && error) {
@@ -84,20 +91,13 @@ export function createSupabasePersistence(): PersistenceAdapter {
       await upsertNodeExecutions(supabase, runId, nodeOutputs);
 
       // Fire alerts on completion/failure (best effort, don't block)
-      if (status === "completed" || status === "failed") {
-        const { data: runRow } = await supabase
-          .from("crm_workflow_runs")
-          .select("workflow_id, duration_ms")
-          .eq("id", runId)
-          .single();
-        if (runRow) {
-          checkWorkflowAlerts(
-            runRow.workflow_id,
-            status,
-            runRow.duration_ms ?? (update.duration_ms as number | null) ?? null,
-            error ?? null
-          ).catch(() => {}); // fire-and-forget
-        }
+      if ((status === "completed" || status === "failed") && workflowId) {
+        checkWorkflowAlerts(
+          workflowId,
+          status,
+          (update.duration_ms as number | null) ?? null,
+          error ?? null
+        ).catch(() => {}); // fire-and-forget
       }
     },
 
@@ -112,9 +112,13 @@ export function createSupabasePersistence(): PersistenceAdapter {
 
       const dealId = (event as unknown as Record<string, unknown>).dealId as string | undefined;
 
+      // Use tg_chat_id = 0 as sentinel for workflow resume messages.
+      // The resume processor at /api/workflows/resume filters on tg_chat_id=0
+      // and checks for _workflow_resume in the payload before processing.
+      // The bot message sender skips rows with tg_chat_id=0.
       await supabase.from("crm_scheduled_messages").insert({
         deal_id: dealId || null,
-        tg_chat_id: 0, // sentinel — not a real TG message
+        tg_chat_id: 0,
         message_text: JSON.stringify({
           _workflow_resume: true,
           run_id: runId,
@@ -129,26 +133,15 @@ export function createSupabasePersistence(): PersistenceAdapter {
       const supabase = createSupabaseAdmin();
       if (!supabase) return;
 
-      // Increment run count and update last_run_at
-      const { data: wf } = await supabase
-        .from("crm_workflows")
-        .select("run_count")
-        .eq("id", workflowId)
-        .single();
-
-      await supabase
-        .from("crm_workflows")
-        .update({
-          last_run_at: new Date().toISOString(),
-          run_count: (wf?.run_count ?? 0) + 1,
-        })
-        .eq("id", workflowId);
+      // Atomic increment using rpc to avoid read-then-write race condition
+      await supabase.rpc("increment_workflow_run_count", { wf_id: workflowId });
     },
   };
 }
 
 /**
  * Upsert per-node execution records from the nodeOutputs map.
+ * Uses ON CONFLICT (run_id, node_id) to atomically update existing rows.
  */
 async function upsertNodeExecutions(
   supabase: NonNullable<ReturnType<typeof createSupabaseAdmin>>,
@@ -167,16 +160,17 @@ async function upsertNodeExecutions(
       node_type: (data.type as string) ?? null,
       node_label: (data.label as string) ?? null,
       output_data: data,
+      input_data: (data.input as Record<string, unknown>) ?? null,
       error_message: (data.error as string) ?? null,
       status: hasError ? "failed" : "completed",
       completed_at: new Date().toISOString(),
     };
   });
 
-  // Use upsert with run_id + node_id as conflict target
-  // Since there's no unique constraint on (run_id, node_id), delete and re-insert
-  await supabase.from("crm_workflow_node_executions").delete().eq("run_id", runId);
-  await supabase.from("crm_workflow_node_executions").insert(rows);
+  // Upsert using the unique constraint on (run_id, node_id)
+  await supabase
+    .from("crm_workflow_node_executions")
+    .upsert(rows, { onConflict: "run_id,node_id" });
 }
 
 function classifyFailure(error: string): string {

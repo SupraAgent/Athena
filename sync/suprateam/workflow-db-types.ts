@@ -13,6 +13,7 @@ export interface Workflow {
   trigger_type: string | null;
   last_run_at: string | null;
   run_count: number;
+  version: number;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -28,6 +29,12 @@ export interface WorkflowRun {
   error: string | null;
   started_at: string;
   completed_at: string | null;
+  duration_ms: number | null;
+  retry_count: number;
+  parent_run_id: string | null;
+  failure_type: string | null;
+  workflow_version: number | null;
+  workflow_snapshot: Record<string, unknown> | null;
 }
 
 export interface WorkflowRunWithWorkflow extends WorkflowRun {
