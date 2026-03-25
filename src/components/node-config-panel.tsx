@@ -24,6 +24,9 @@ import type {
   DatabaseConfig,
   DatabaseOperation,
   DatabaseConnectorType,
+  AINodeData,
+  AINodeConfig,
+  AITool,
 } from "../core/types";
 import {
   validateCronExpression,
@@ -69,6 +72,7 @@ export function NodeConfigPanel({ node, onDataChange, onDelete }: NodeConfigPane
     sub_workflow: "text-sky-400",
     schedule: "text-violet-400",
     database: "text-teal-400",
+    ai: "text-violet-400",
   };
 
   // Look up registered config fields
@@ -154,6 +158,13 @@ export function NodeConfigPanel({ node, onDataChange, onDelete }: NodeConfigPane
           data={data as DatabaseNodeData}
           updateConfig={updateConfig}
           onDataChange={(newData) => onDataChange(node.id, newData)}
+        />
+      )}
+      {data.nodeType === "ai" && (
+        <AIConfigPanel
+          data={data as AINodeData}
+          onDataChange={(newData) => onDataChange(node.id, newData)}
+          updateConfig={updateConfig}
         />
       )}
 
@@ -2107,6 +2118,372 @@ function AggregateOperationFields({
         />
       </Field>
     </>
+  );
+}
+
+// ── AI config ────────────────────────────────────────────────────
+
+function AIConfigPanel({
+  data,
+  onDataChange,
+  updateConfig,
+}: {
+  data: AINodeData;
+  onDataChange: (newData: WorkflowNodeData) => void;
+  updateConfig: (key: string, value: unknown) => void;
+}) {
+  const config = data.config;
+  const tools = config.tools ?? [];
+  const [expandedTools, setExpandedTools] = React.useState<Set<number>>(
+    new Set()
+  );
+  const [jsonErrors, setJsonErrors] = React.useState<Map<number, string>>(
+    new Map()
+  );
+
+  function updateTools(newTools: AITool[]) {
+    onDataChange({
+      ...data,
+      config: { ...data.config, tools: newTools },
+    });
+  }
+
+  function addTool() {
+    const newTool: AITool = {
+      name: `tool_${tools.length + 1}`,
+      description: "",
+      parameters: { type: "object", properties: {} },
+      handler: "",
+    };
+    const newTools = [...tools, newTool];
+    updateTools(newTools);
+    setExpandedTools((prev) => new Set(prev).add(newTools.length - 1));
+  }
+
+  function removeTool(index: number) {
+    updateTools(tools.filter((_, i) => i !== index));
+    setExpandedTools((prev) => {
+      const next = new Set<number>();
+      for (const idx of prev) {
+        if (idx < index) next.add(idx);
+        else if (idx > index) next.add(idx - 1);
+      }
+      return next;
+    });
+    setJsonErrors((prev) => {
+      const next = new Map<number, string>();
+      for (const [idx, err] of prev) {
+        if (idx < index) next.set(idx, err);
+        else if (idx > index) next.set(idx - 1, err);
+      }
+      return next;
+    });
+  }
+
+  function updateTool(
+    index: number,
+    field: keyof AITool,
+    value: unknown
+  ) {
+    const newTools = tools.map((t, i) =>
+      i === index ? { ...t, [field]: value } : t
+    );
+    updateTools(newTools);
+  }
+
+  function toggleTool(index: number) {
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg bg-gradient-to-r from-purple-500/5 to-blue-500/5 border border-purple-500/10 px-3 py-2">
+        <p className="text-[10px] text-purple-400/80">
+          AI / LLM Node
+        </p>
+      </div>
+
+      <Field label="Provider">
+        <input
+          value={config.provider ?? ""}
+          onChange={(e) => updateConfig("provider", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="openai, anthropic, custom..."
+        />
+      </Field>
+
+      <Field label="Model">
+        <input
+          value={config.model ?? ""}
+          onChange={(e) => updateConfig("model", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="gpt-4o, claude-sonnet-4-20250514..."
+        />
+      </Field>
+
+      <Field label="System Prompt">
+        <textarea
+          value={config.systemPrompt ?? ""}
+          onChange={(e) => updateConfig("systemPrompt", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-xs resize-none outline-none focus:border-white/20"
+          rows={3}
+          placeholder="You are a helpful assistant..."
+        />
+      </Field>
+
+      <Field label="User Prompt">
+        <textarea
+          value={config.prompt ?? ""}
+          onChange={(e) => updateConfig("prompt", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-xs resize-none outline-none focus:border-white/20"
+          rows={4}
+          placeholder="Use {{nodeId.output.field}} for expressions"
+        />
+        <p className="text-[9px] text-muted-foreground/50 mt-0.5">
+          Supports {"{{"} expressions {"}}"} for dynamic content
+        </p>
+      </Field>
+
+      <Field label="Temperature">
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={0}
+            max={2}
+            step={0.1}
+            value={config.temperature ?? 0.7}
+            onChange={(e) =>
+              updateConfig("temperature", parseFloat(e.target.value))
+            }
+            className="flex-1 h-1 accent-purple-400"
+          />
+          <span className="text-[10px] text-muted-foreground w-8 text-right">
+            {(config.temperature ?? 0.7).toFixed(1)}
+          </span>
+        </div>
+      </Field>
+
+      <Field label="Max Tokens">
+        <input
+          type="number"
+          value={String(config.maxTokens ?? "")}
+          onChange={(e) =>
+            updateConfig(
+              "maxTokens",
+              e.target.value ? Number(e.target.value) : undefined
+            )
+          }
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="Auto (provider default)"
+          min={1}
+        />
+      </Field>
+
+      <Field label="Response Format">
+        <div className="flex gap-1">
+          <button
+            type="button"
+            onClick={() => updateConfig("responseFormat", "text")}
+            className={`text-[10px] px-3 py-1 rounded-lg transition-colors ${
+              (config.responseFormat ?? "text") === "text"
+                ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                : "bg-white/5 text-muted-foreground border border-white/10 hover:text-foreground"
+            }`}
+          >
+            Text
+          </button>
+          <button
+            type="button"
+            onClick={() => updateConfig("responseFormat", "json")}
+            className={`text-[10px] px-3 py-1 rounded-lg transition-colors ${
+              config.responseFormat === "json"
+                ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                : "bg-white/5 text-muted-foreground border border-white/10 hover:text-foreground"
+            }`}
+          >
+            JSON
+          </button>
+        </div>
+      </Field>
+
+      <Field label="Stream">
+        <button
+          type="button"
+          onClick={() => updateConfig("stream", !config.stream)}
+          className={`text-[10px] px-3 py-1 rounded-lg transition-colors ${
+            config.stream
+              ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+              : "bg-white/5 text-muted-foreground border border-white/10 hover:text-foreground"
+          }`}
+        >
+          {config.stream ? "Enabled" : "Disabled"}
+        </button>
+      </Field>
+
+      {/* Tools section */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] text-muted-foreground">
+            Tools ({tools.length})
+          </label>
+          <button
+            type="button"
+            onClick={addTool}
+            className="text-[10px] text-purple-400 hover:text-purple-300 transition-colors"
+          >
+            + Add tool
+          </button>
+        </div>
+
+        {tools.map((tool, i) => (
+          <div
+            key={i}
+            className="rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden"
+          >
+            <div
+              className="flex items-center gap-1.5 px-2 py-1.5 cursor-pointer hover:bg-white/[0.03] transition-colors"
+              onClick={() => toggleTool(i)}
+            >
+              <span className="text-[10px] text-purple-400/70">
+                {expandedTools.has(i) ? "\u25BC" : "\u25B6"}
+              </span>
+              <span className="text-[10px] font-medium text-foreground flex-1 truncate">
+                {tool.name || "Unnamed tool"}
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeTool(i);
+                }}
+                className="text-red-400/70 hover:text-red-400 text-[10px] px-1"
+                title="Remove tool"
+              >
+                x
+              </button>
+            </div>
+
+            {expandedTools.has(i) && (
+              <div className="px-2 pb-2 space-y-2 border-t border-white/5">
+                <Field label="Name">
+                  <input
+                    value={tool.name}
+                    onChange={(e) => updateTool(i, "name", e.target.value)}
+                    className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+                    placeholder="get_weather"
+                  />
+                </Field>
+                <Field label="Description">
+                  <textarea
+                    value={tool.description}
+                    onChange={(e) =>
+                      updateTool(i, "description", e.target.value)
+                    }
+                    className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1.5 text-[10px] resize-none outline-none focus:border-white/20"
+                    rows={2}
+                    placeholder="What this tool does..."
+                  />
+                </Field>
+                <Field label="Parameters (JSON Schema)">
+                  <textarea
+                    value={
+                      typeof tool.parameters === "string"
+                        ? tool.parameters
+                        : JSON.stringify(tool.parameters, null, 2)
+                    }
+                    onChange={(e) => {
+                      try {
+                        const parsed = JSON.parse(e.target.value);
+                        updateTool(i, "parameters", parsed);
+                        setJsonErrors((prev) => {
+                          const next = new Map(prev);
+                          next.delete(i);
+                          return next;
+                        });
+                      } catch (err) {
+                        updateTool(i, "parameters", e.target.value);
+                        setJsonErrors((prev) => {
+                          const next = new Map(prev);
+                          next.set(i, err instanceof SyntaxError ? err.message : "Invalid JSON");
+                          return next;
+                        });
+                      }
+                    }}
+                    className={`w-full rounded-lg border bg-transparent px-2 py-1.5 text-[10px] resize-none outline-none font-mono ${
+                      jsonErrors.has(i)
+                        ? "border-red-500/40 focus:border-red-500/60"
+                        : "border-white/10 focus:border-white/20"
+                    }`}
+                    rows={4}
+                    placeholder='{"type": "object", "properties": {}}'
+                    spellCheck={false}
+                  />
+                  {jsonErrors.has(i) && (
+                    <p className="text-[9px] text-red-400/80 mt-0.5">
+                      {jsonErrors.get(i)}
+                    </p>
+                  )}
+                </Field>
+                <Field label="Handler Expression">
+                  <input
+                    value={tool.handler}
+                    onChange={(e) =>
+                      updateTool(i, "handler", e.target.value)
+                    }
+                    className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20 font-mono"
+                    placeholder="nodeId.output or action reference"
+                  />
+                </Field>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {tools.length === 0 && (
+          <p className="text-[10px] text-muted-foreground/50 italic">
+            No tools defined
+          </p>
+        )}
+      </div>
+
+      <Field label="Max Tool Rounds">
+        <input
+          type="number"
+          value={String(config.maxToolRounds ?? 5)}
+          onChange={(e) =>
+            updateConfig("maxToolRounds", Number(e.target.value))
+          }
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          min={1}
+          max={20}
+        />
+      </Field>
+
+      <Field label="Credential ID">
+        <input
+          value={config.credentialId ?? ""}
+          onChange={(e) => updateConfig("credentialId", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="Optional credential reference"
+        />
+      </Field>
+
+      <div className="text-[10px] text-muted-foreground space-y-1.5">
+        <p>
+          The AI provider must be registered in EngineConfig by the
+          consuming application.
+        </p>
+        <p>
+          Tool handlers can reference upstream node outputs or action
+          types to execute when the AI calls a tool.
+        </p>
+      </div>
+    </div>
   );
 }
 

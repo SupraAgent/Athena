@@ -807,6 +807,7 @@ function ListView({
   canExecute,
   canEdit,
   canDelete,
+  canDuplicate,
   onToggle,
   onExecute,
   onEdit,

@@ -91,6 +91,14 @@ const DEFAULT_LOGIC: NodePaletteItem[] = [
       operation: { type: "query", sql: "", params: [] },
     },
   },
+  {
+    type: "ai",
+    subType: "ai",
+    label: "AI / LLM",
+    description: "AI model with tool use",
+    icon: "Brain",
+    defaultConfig: { provider: "", model: "", prompt: "", temperature: 0.7, maxToolRounds: 5 },
+  },
 ];
 
 export interface BuilderContextValue {
