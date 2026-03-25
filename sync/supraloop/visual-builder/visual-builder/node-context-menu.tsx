@@ -5,10 +5,14 @@ import * as React from "react";
 type ContextMenuProps = {
   x: number;
   y: number;
-  onEdit: () => void;
-  onDuplicate: () => void;
+  onEdit?: () => void;
+  onDuplicate?: () => void;
   onDelete: () => void;
   onClose: () => void;
+  onLockGroup?: () => void;
+  onUnlockGroup?: () => void;
+  isLocked?: boolean;
+  selectionCount?: number;
 };
 
 export function NodeContextMenu({
@@ -18,6 +22,10 @@ export function NodeContextMenu({
   onDuplicate,
   onDelete,
   onClose,
+  onLockGroup,
+  onUnlockGroup,
+  isLocked,
+  selectionCount,
 }: ContextMenuProps) {
   const ref = React.useRef<HTMLDivElement>(null);
 
@@ -38,11 +46,39 @@ export function NodeContextMenu({
     };
   }, [onClose]);
 
-  const items = [
-    { label: "Edit", icon: "✏️", action: onEdit },
-    { label: "Duplicate", icon: "📋", action: onDuplicate },
-    { label: "Delete", icon: "🗑", action: onDelete, danger: true },
-  ];
+  const isMulti = (selectionCount ?? 1) > 1;
+
+  const items: {
+    label: string;
+    icon: string;
+    action: () => void;
+    danger?: boolean;
+  }[] = [];
+
+  // Single-node items
+  if (!isMulti && onEdit) {
+    items.push({ label: "Edit", icon: "\u270F\uFE0F", action: onEdit });
+  }
+  if (!isMulti && onDuplicate) {
+    items.push({ label: "Duplicate", icon: "\uD83D\uDCCB", action: onDuplicate });
+  }
+
+  // Multi-select grouping items
+  if (isMulti || isLocked) {
+    if (isLocked && onUnlockGroup) {
+      items.push({ label: "Unlock Group", icon: "\uD83D\uDD13", action: onUnlockGroup });
+    } else if (!isLocked && onLockGroup && isMulti) {
+      items.push({ label: "Lock Group", icon: "\uD83D\uDD12", action: onLockGroup });
+    }
+  }
+
+  // Always show delete
+  items.push({
+    label: isMulti ? `Delete ${selectionCount} nodes` : "Delete",
+    icon: "\uD83D\uDDD1",
+    action: onDelete,
+    danger: true,
+  });
 
   return (
     <div
