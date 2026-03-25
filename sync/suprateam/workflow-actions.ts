@@ -176,7 +176,14 @@ export async function executeSendSlack(
     return { success: false, error: "No Slack channel selected" };
   }
 
-  let message = renderTemplate(config.message || "{{message_text}}", ctx.vars);
+  // Use plain string replacement for Slack (no HTML escaping — Slack uses mrkdwn, not HTML)
+  let message = (config.message || "{{message_text}}").replace(
+    /\{\{(\w+)\}\}/g,
+    (_m: string, key: string) => {
+      const val = ctx.vars[key];
+      return val !== undefined && val !== null ? String(val) : "";
+    }
+  );
 
   // Prepend @mention if configured
   if (config.mention_user_id) {
