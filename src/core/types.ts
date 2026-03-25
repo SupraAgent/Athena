@@ -6,7 +6,7 @@
 
 // ── Node data types ─────────────────────────────────────────────
 
-export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow" | "schedule" | "database";
+export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow" | "schedule" | "database" | "ai";
 
 export interface TriggerNodeData {
   nodeType: "trigger";
@@ -288,6 +288,91 @@ export interface DatabaseAdapter {
   testConnection?(config: DatabaseConfig): Promise<{ connected: boolean; error?: string }>;
 }
 
+// ── AI Node types ────────────────────────────────────────────────
+
+export interface AINodeConfig {
+  /** Provider identifier: "openai", "anthropic", "custom", etc. */
+  provider: string;
+  /** Model identifier, e.g. "gpt-4o", "claude-sonnet-4-20250514" */
+  model: string;
+  /** User prompt — supports {{expressions}} for template resolution */
+  prompt: string;
+  /** Optional system prompt */
+  systemPrompt?: string;
+  /** Sampling temperature (0-2) */
+  temperature?: number;
+  /** Maximum tokens in the response */
+  maxTokens?: number;
+  /** Response format: plain text or structured JSON */
+  responseFormat?: "text" | "json";
+  /** Tool definitions for function calling / tool use */
+  tools?: AITool[];
+  /** Maximum tool-use rounds to prevent infinite loops (default: 5) */
+  maxToolRounds?: number;
+  /** Whether to use streaming if the provider supports it */
+  stream?: boolean;
+  /** Credential reference for API key resolution */
+  credentialId?: string;
+}
+
+export interface AITool {
+  /** Tool/function name */
+  name: string;
+  /** Human-readable description of what the tool does */
+  description: string;
+  /** JSON Schema for the tool's parameters */
+  parameters: Record<string, unknown>;
+  /** Expression or action reference to execute when this tool is called */
+  handler: string;
+}
+
+export interface AIToolCall {
+  /** Unique identifier for this tool call */
+  id: string;
+  /** Name of the tool being called */
+  name: string;
+  /** Parsed arguments from the model */
+  arguments: Record<string, unknown>;
+}
+
+export interface AINodeResult {
+  /** Final text response from the model */
+  response: string;
+  /** Tool calls made during execution (if any) */
+  toolCalls?: AIToolCall[];
+  /** Results from tool executions (if any) */
+  toolResults?: Record<string, unknown>[];
+  /** Token usage statistics */
+  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  /** Model that was used */
+  model: string;
+  /** Reason the model stopped generating */
+  finishReason: string;
+}
+
+export interface AINodeData {
+  nodeType: "ai";
+  label: string;
+  config: AINodeConfig;
+}
+
+// ── AI Suggestion types ─────────────────────────────────────────
+
+export interface AISuggestion {
+  id: string;
+  type: "add_node" | "add_edge" | "modify_config" | "add_error_handling" | "optimize";
+  title: string;
+  description: string;
+  /** Confidence score 0-1 */
+  confidence: number;
+  preview?: {
+    nodes?: FlowNode[];
+    edges?: FlowEdge[];
+    configChanges?: Record<string, unknown>;
+  };
+  apply: () => void;
+}
+
 export type WorkflowNodeData =
   | TriggerNodeData
   | ActionNodeData
@@ -300,7 +385,8 @@ export type WorkflowNodeData =
   | TransformNodeData
   | SubWorkflowNodeData
   | ScheduleNodeData
-  | DatabaseNodeData;
+  | DatabaseNodeData
+  | AINodeData;
 
 // ── Node palette (what shows in the sidebar) ────────────────────
 
@@ -326,6 +412,13 @@ export interface ConfigFieldDef {
   placeholder?: string;
   options?: { value: string; label: string }[]; // for select type
   defaultValue?: string | number;
+  /** When set, this field can be populated from a stored credential */
+  credentialRef?: {
+    /** The credential definition ID this field can pull from */
+    definitionId: string;
+    /** The field key within the credential to use */
+    fieldKey: string;
+  };
 }
 
 /**

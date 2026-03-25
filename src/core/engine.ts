@@ -26,6 +26,7 @@ import type {
   DatabaseAdapter,
   WorkflowResolver,
   CredentialStore,
+  AINodeData,
   RetryConfig,
   NodeTiming,
   ExecutionLogger,
@@ -41,6 +42,7 @@ import {
 } from "./expression-resolver";
 import type { TokenBucketRateLimiter } from "./rate-limiter";
 import { validateSubWorkflow } from "./sub-workflow-validator";
+import { AIExecutor, type AIProvider } from "./ai-executor";
 
 export interface EngineConfig {
   /** Executes action nodes — provided by consuming app */
@@ -73,6 +75,12 @@ export interface EngineConfig {
    * Consuming apps provide this to connect to their choice of DB library.
    */
   databaseAdapter?: DatabaseAdapter;
+  /**
+   * Optional AI provider for executing AI nodes.
+   * Generic interface — no SDK dependency. Consuming apps implement this
+   * to bridge to OpenAI, Anthropic, or any other LLM provider.
+   */
+  aiProvider?: AIProvider;
 }
 
 /**
@@ -647,7 +655,7 @@ async function executeNode(
     // Resolve filter expressions for MongoDB find
     if (dbConfig.operation.type === "find" && dbConfig.operation.filter) {
       try {
-        const filterStr = resolveTemplate(dbConfig.operation.filter, actionCtx.vars as Record<string, string | number | undefined>);
+        const filterStr = resolveTemplate(dbConfig.operation.filter, exprCtx);
         resolvedParams["_filter"] = JSON.parse(filterStr);
       } catch {
         resolvedParams["_filter"] = {};
@@ -657,7 +665,7 @@ async function executeNode(
     // Resolve pipeline expressions for MongoDB aggregate
     if (dbConfig.operation.type === "aggregate" && dbConfig.operation.pipeline) {
       try {
-        const pipelineStr = resolveTemplate(dbConfig.operation.pipeline, actionCtx.vars as Record<string, string | number | undefined>);
+        const pipelineStr = resolveTemplate(dbConfig.operation.pipeline, exprCtx);
         resolvedParams["_pipeline"] = JSON.parse(pipelineStr);
       } catch {
         resolvedParams["_pipeline"] = [];
@@ -896,6 +904,76 @@ async function executeNode(
     };
   }
 
+  // ── AI: execute via AI provider ──
+  if (data.nodeType === "ai") {
+    const aiData = data as AINodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "ai", { provider: aiData.config.provider, model: aiData.config.model }));
+
+    if (!config.aiProvider) {
+      const errorMsg = `AI node "${nodeId}" requires an aiProvider in EngineConfig`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return {
+        status: "failed",
+        output: { success: false, error: errorMsg },
+        timing,
+        nextNodes: [],
+        error: errorMsg,
+      };
+    }
+
+    try {
+      const executor = new AIExecutor(config.aiProvider);
+      // Build expression context from current node outputs and action context vars
+      const exprContext = {
+        nodeOutputs: buildNodeOutputsForAI(nodeOutputs),
+        vars: actionCtx.vars as Record<string, unknown>,
+        env: (actionCtx as Record<string, unknown>).env as Record<string, string> | undefined,
+      };
+
+      const aiResult = await executor.execute(
+        aiData.config,
+        exprContext,
+        config.aiProvider
+      );
+
+      const output = {
+        success: true,
+        output: {
+          response: aiResult.response,
+          toolCalls: aiResult.toolCalls,
+          toolResults: aiResult.toolResults,
+          usage: aiResult.usage,
+          model: aiResult.model,
+          finishReason: aiResult.finishReason,
+        },
+      };
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) =>
+        l.onNodeComplete?.(runId, nodeId, output as unknown as Record<string, unknown>, timing.durationMs)
+      );
+      const nextEdges = outEdges.get(nodeId) ?? [];
+      return {
+        status: "completed",
+        output,
+        timing,
+        nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const output = { success: false, error: errorMsg };
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      const nextEdges = outEdges.get(nodeId) ?? [];
+      return {
+        status: "completed",
+        output,
+        timing,
+        nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+      };
+    }
+  }
+
   // ── Unknown type: pass through ──
   emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, (data as { nodeType: string }).nodeType, {}));
   const output = { type: (data as { nodeType: string }).nodeType, passthrough: true };
@@ -910,6 +988,26 @@ async function executeNode(
     timing,
     nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
   };
+}
+
+// ── AI helper ───────────────────────────────────────────────────
+
+/**
+ * Convert engine nodeOutputs to the shape expected by AIExecutor.
+ */
+function buildNodeOutputsForAI(
+  nodeOutputs: Record<string, unknown>
+): Record<string, Record<string, unknown>> {
+  const result: Record<string, Record<string, unknown>> = {};
+  for (const [nodeId, value] of Object.entries(nodeOutputs)) {
+    if (nodeId.startsWith("_")) continue;
+    if (value != null && typeof value === "object") {
+      result[nodeId] = value as Record<string, unknown>;
+    } else if (value !== undefined) {
+      result[nodeId] = { value };
+    }
+  }
+  return result;
 }
 
 /**

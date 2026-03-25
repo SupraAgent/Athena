@@ -31,6 +31,7 @@ import { TransformNode } from "./nodes/transform-node";
 import { SubWorkflowNode } from "./nodes/sub-workflow-node";
 import { ScheduleNode } from "./nodes/schedule-node";
 import { DatabaseNode } from "./nodes/database-node";
+import { AINode } from "./nodes/ai-node";
 import { NodeSidebar } from "./node-sidebar";
 import { NodeConfigPanel } from "./node-config-panel";
 import type { WorkflowNodeData, NodeRegistry, FlowNode as CoreFlowNode, FlowEdge as CoreFlowEdge } from "../core/types";
@@ -50,6 +51,7 @@ const nodeTypes: NodeTypes = {
   sub_workflow: SubWorkflowNode,
   schedule: ScheduleNode,
   database: DatabaseNode,
+  ai: AINode,
 };
 
 export interface FlowCanvasProps {
@@ -180,6 +182,8 @@ function FlowCanvasInner({
         data = { nodeType: "sub_workflow", label, config: { workflowId: "", inputMappings: {}, outputMappings: {}, maxDepth: 10, ...defaultConfig } };
       } else if (nodeType === "schedule") {
         data = { nodeType: "schedule", label, config: { mode: "interval", interval: { value: 5, unit: "minutes" }, ...defaultConfig } };
+      } else if (nodeType === "ai") {
+        data = { nodeType: "ai", label, config: { provider: "", model: "", prompt: "", temperature: 0.7, maxToolRounds: 5, ...defaultConfig } };
       } else {
         data = { nodeType: "delay", label, config: { duration: 1, unit: "hours", ...defaultConfig } };
       }
@@ -319,6 +323,7 @@ function FlowCanvasInner({
                 case "transform": return "rgba(16, 185, 129, 0.5)";
                 case "sub_workflow": return "rgba(56, 189, 248, 0.5)";
                 case "schedule": return "rgba(139, 92, 246, 0.5)";
+                case "ai": return "rgba(168, 85, 247, 0.5)";
                 default: return "rgba(255,255,255,0.1)";
               }
             }}

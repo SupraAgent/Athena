@@ -38,6 +38,13 @@ export type {
   DatabaseAdapter,
   WorkflowNodeData,
   ConditionOperator,
+  // AI Node
+  AINodeConfig,
+  AITool,
+  AIToolCall,
+  AINodeResult,
+  AINodeData,
+  AISuggestion,
   // Retry
   RetryConfig,
   // Palette
@@ -117,6 +124,20 @@ export {
 } from "./core/expression-resolver";
 
 export { cn } from "./core/utils";
+
+// ── AI Executor ──────────────────────────────────────────────────
+export {
+  AIExecutor,
+  type AIProvider,
+  type AIChatRequest,
+  type AIChatResponse,
+  type AIChatChunk,
+  type AIChatMessage,
+  type AIExpressionContext,
+} from "./core/ai-executor";
+
+// ── AI Suggestion Engine ─────────────────────────────────────────
+export { AISuggestionEngine } from "./core/ai-suggestions";
 
 // ── Database Connector ───────────────────────────────────────────
 export {
@@ -202,6 +223,8 @@ export { TransformNode } from "./components/nodes/transform-node";
 export { SubWorkflowNode } from "./components/nodes/sub-workflow-node";
 export { ScheduleNode } from "./components/nodes/schedule-node";
 export { DatabaseNode } from "./components/nodes/database-node";
+export { AINode } from "./components/nodes/ai-node";
+export { AISuggestionsPanel, type AISuggestionsPanelProps } from "./components/ai-suggestions-panel";
 
 // ── Personas & Agents ────────────────────────────────────────────
 export type { CPOPersona, ProductThesis, DecisionHeuristic, StrategicPriority } from "./personas";
