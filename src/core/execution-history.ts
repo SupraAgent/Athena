@@ -19,6 +19,33 @@ function now(): string {
   return new Date().toISOString();
 }
 
+/** Keys matching these patterns will have their values redacted before storage. */
+const SECRET_KEY_PATTERN = /token|key|secret|password|authorization/i;
+
+/**
+ * Deep-redact values in a record where the key looks like a secret.
+ * Returns a new object — never mutates the input.
+ */
+function redactSecrets(input: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(input)) {
+    if (SECRET_KEY_PATTERN.test(key)) {
+      result[key] = "[REDACTED]";
+    } else if (Array.isArray(value)) {
+      result[key] = value.map((item) =>
+        item !== null && typeof item === "object" && !Array.isArray(item)
+          ? redactSecrets(item as Record<string, unknown>)
+          : item
+      );
+    } else if (value !== null && typeof value === "object") {
+      result[key] = redactSecrets(value as Record<string, unknown>);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
 function computeStats(records: ExecutionRecord[]): ExecutionStats {
   const totalRuns = records.length;
   if (totalRuns === 0) {
@@ -152,7 +179,7 @@ export class ExecutionHistoryStore implements ExecutionLogger {
       nodeType,
       status: "started",
       timestamp: now(),
-      input,
+      input: redactSecrets(input),
     };
     record.nodeEvents.push(event);
     this.notify();
@@ -167,7 +194,7 @@ export class ExecutionHistoryStore implements ExecutionLogger {
       status: "completed",
       timestamp: now(),
       durationMs,
-      output,
+      output: redactSecrets(output),
     };
     record.nodeEvents.push(event);
     this.notify();

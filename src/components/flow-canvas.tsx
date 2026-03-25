@@ -29,6 +29,8 @@ import { SwitchNode } from "./nodes/switch-node";
 import { LoopNode } from "./nodes/loop-node";
 import { TransformNode } from "./nodes/transform-node";
 import { SubWorkflowNode } from "./nodes/sub-workflow-node";
+import { ScheduleNode } from "./nodes/schedule-node";
+import { DatabaseNode } from "./nodes/database-node";
 import { NodeSidebar } from "./node-sidebar";
 import { NodeConfigPanel } from "./node-config-panel";
 import type { WorkflowNodeData, NodeRegistry, FlowNode as CoreFlowNode, FlowEdge as CoreFlowEdge } from "../core/types";
@@ -46,6 +48,8 @@ const nodeTypes: NodeTypes = {
   loop: LoopNode,
   transform: TransformNode,
   sub_workflow: SubWorkflowNode,
+  schedule: ScheduleNode,
+  database: DatabaseNode,
 };
 
 export interface FlowCanvasProps {
@@ -67,9 +71,9 @@ export interface FlowCanvasProps {
   smartDefaultRules?: SmartDefaultRule[];
 }
 
-let nodeId = 0;
 function getNodeId() {
-  return `node_${++nodeId}_${Date.now()}`;
+  const random = Math.random().toString(36).slice(2, 10);
+  return `node_${Date.now()}_${random}`;
 }
 
 function FlowCanvasInner({
@@ -174,6 +178,8 @@ function FlowCanvasInner({
         data = { nodeType: "transform", label, config: { inputExpression: "", operations: [], ...defaultConfig } };
       } else if (nodeType === "sub_workflow") {
         data = { nodeType: "sub_workflow", label, config: { workflowId: "", inputMappings: {}, outputMappings: {}, maxDepth: 10, ...defaultConfig } };
+      } else if (nodeType === "schedule") {
+        data = { nodeType: "schedule", label, config: { mode: "interval", interval: { value: 5, unit: "minutes" }, ...defaultConfig } };
       } else {
         data = { nodeType: "delay", label, config: { duration: 1, unit: "hours", ...defaultConfig } };
       }
@@ -312,6 +318,7 @@ function FlowCanvasInner({
                 case "loop": return "rgba(99, 102, 241, 0.5)";
                 case "transform": return "rgba(16, 185, 129, 0.5)";
                 case "sub_workflow": return "rgba(56, 189, 248, 0.5)";
+                case "schedule": return "rgba(139, 92, 246, 0.5)";
                 default: return "rgba(255,255,255,0.1)";
               }
             }}

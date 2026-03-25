@@ -8,6 +8,7 @@
  */
 
 import type { FlowNode, FlowEdge } from "./types";
+import { stripRuntimeAndSecrets } from "./utils";
 
 // ── Schema version ──────────────────────────────────────────────
 
@@ -44,49 +45,7 @@ export interface SchemaValidationResult {
   errors: string[];
 }
 
-// ── Runtime key stripping ───────────────────────────────────────
-
-const RUNTIME_KEYS = new Set([
-  "runId",
-  "executionState",
-  "lastRunAt",
-  "lastRunStatus",
-  "lastRunError",
-  "lastRunDuration",
-  "_executionOutput",
-  "_retryCount",
-]);
-
-/** Keys whose values may contain resolved secrets and must be redacted on export. */
-const SECRET_KEY_PATTERN = /token|key|secret|password|authorization/i;
-
-/** Credential reference pattern — safe to keep in exports. */
-const CREDENTIAL_REF_PATTERN = /^credential:.+/;
-
-function stripRuntimeState(obj: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (RUNTIME_KEYS.has(key)) continue;
-    if (typeof value === "string" && CREDENTIAL_REF_PATTERN.test(value)) {
-      // Keep credential references — they are safe (not resolved values)
-      result[key] = value;
-    } else if (typeof value === "string" && SECRET_KEY_PATTERN.test(key)) {
-      // Redact resolved secret values to prevent credential leakage
-      result[key] = "";
-    } else if (Array.isArray(value)) {
-      result[key] = value.map((item) =>
-        typeof item === "object" && item !== null
-          ? stripRuntimeState(item as Record<string, unknown>)
-          : item
-      );
-    } else if (typeof value === "object" && value !== null) {
-      result[key] = stripRuntimeState(value as Record<string, unknown>);
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
+// ── Runtime key stripping (uses shared utility from utils.ts) ───
 
 // ── Export ───────────────────────────────────────────────────────
 
@@ -103,7 +62,7 @@ export function exportWorkflow(
     id: node.id,
     type: node.type,
     position: { x: node.position.x, y: node.position.y },
-    data: stripRuntimeState(
+    data: stripRuntimeAndSecrets(
       node.data as unknown as Record<string, unknown>
     ) as unknown as FlowNode["data"],
   }));

@@ -6,7 +6,7 @@
 
 // ── Node data types ─────────────────────────────────────────────
 
-export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow";
+export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow" | "schedule" | "database";
 
 export interface TriggerNodeData {
   nodeType: "trigger";
@@ -204,6 +204,90 @@ export interface WorkflowResolver {
   resolve(workflowId: string, version?: string): Promise<WorkflowData | undefined>;
 }
 
+// ── Schedule trigger types ────────────────────────────────────────
+
+export interface ScheduleIntervalConfig {
+  value: number;
+  unit: "seconds" | "minutes" | "hours" | "days";
+}
+
+export interface ScheduleCalendarConfig {
+  frequency: "daily" | "weekly" | "monthly" | "yearly";
+  time: string;        // "HH:mm" 24h format
+  dayOfWeek?: number;  // 0-6, for weekly
+  dayOfMonth?: number; // 1-31, for monthly
+  month?: number;      // 1-12, for yearly
+}
+
+export interface ScheduleConfig {
+  mode: "interval" | "cron" | "calendar";
+  // Interval mode
+  interval?: ScheduleIntervalConfig;
+  // Cron mode
+  cronExpression?: string;
+  // Calendar mode (consumer-friendly)
+  calendar?: ScheduleCalendarConfig;
+  timezone?: string;       // IANA timezone (default "UTC")
+  startDate?: string;      // ISO date, optional
+  endDate?: string;        // ISO date, optional
+  maxExecutions?: number;  // cap total runs
+}
+
+export interface ScheduleState {
+  lastRunAt?: string;       // ISO
+  nextRunAt?: string;       // ISO
+  executionCount: number;
+  isActive: boolean;
+}
+
+export interface ScheduleNodeData {
+  nodeType: "schedule";
+  label: string;
+  config: ScheduleConfig;
+}
+
+// ── Database connector types ─────────────────────────────────────
+
+export type DatabaseConnectorType = "postgresql" | "mysql" | "sqlite" | "mongodb" | "custom";
+
+export type DatabaseOperation =
+  | { type: "query"; sql: string; params?: Array<{ name: string; expression: string }> }
+  | { type: "insert"; table: string; values: Record<string, string> }
+  | { type: "update"; table: string; values: Record<string, string>; where: string }
+  | { type: "delete"; table: string; where: string }
+  | { type: "find"; collection: string; filter: string; projection?: string[] }
+  | { type: "aggregate"; collection: string; pipeline: string };
+
+export interface DatabaseConfig {
+  connectorType: DatabaseConnectorType;
+  credentialId?: string;
+  operation: DatabaseOperation;
+}
+
+export interface DatabaseNodeData {
+  nodeType: "database";
+  label: string;
+  config: DatabaseConfig;
+}
+
+export interface DatabaseResult {
+  success: boolean;
+  rows?: Record<string, unknown>[];
+  rowCount?: number;
+  affectedRows?: number;
+  error?: string;
+  durationMs: number;
+}
+
+/**
+ * Database adapter interface — consuming apps implement this
+ * to connect the engine to their choice of DB library (pg, mysql2, etc.).
+ */
+export interface DatabaseAdapter {
+  execute(config: DatabaseConfig, resolvedParams: Record<string, unknown>): Promise<DatabaseResult>;
+  testConnection?(config: DatabaseConfig): Promise<{ connected: boolean; error?: string }>;
+}
+
 export type WorkflowNodeData =
   | TriggerNodeData
   | ActionNodeData
@@ -214,7 +298,9 @@ export type WorkflowNodeData =
   | SwitchNodeData
   | LoopNodeData
   | TransformNodeData
-  | SubWorkflowNodeData;
+  | SubWorkflowNodeData
+  | ScheduleNodeData
+  | DatabaseNodeData;
 
 // ── Node palette (what shows in the sidebar) ────────────────────
 
@@ -390,7 +476,7 @@ export interface WorkflowEvent {
 export interface ActionContext {
   workflowId: string;
   runId: string;
-  vars: Record<string, string | number | undefined>;
+  vars: Record<string, unknown>;
   /** Sub-workflow call stack for cycle detection. Managed by the engine. */
   _callStack?: string[];
   [key: string]: unknown; // consumers can add their own context
@@ -400,6 +486,8 @@ export interface ActionResult {
   success: boolean;
   output?: Record<string, unknown>;
   error?: string;
+  /** If explicitly false, the engine will not retry this error. If true or undefined, normal retry logic applies. */
+  retryable?: boolean;
 }
 
 /**
@@ -573,6 +661,149 @@ export interface TimeSeriesBucket {
 export interface SerializedHistory {
   version: 1;
   records: ExecutionRecord[];
+  exportedAt: string;
+}
+
+// ── RBAC (Role-Based Access Control) ─────────────────────────────
+
+export type Permission =
+  | "workflow:create" | "workflow:read" | "workflow:update" | "workflow:delete" | "workflow:execute"
+  | "workflow:toggle"
+  | "credential:create" | "credential:read" | "credential:update" | "credential:delete"
+  | "template:create" | "template:read" | "template:publish"
+  | "history:read" | "history:export"
+  | "admin:users" | "admin:roles" | "admin:settings";
+
+export interface Role {
+  id: string;
+  name: string;
+  description: string;
+  permissions: Permission[];
+  isBuiltIn: boolean;
+}
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  roleIds: string[];
+  isActive: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
+}
+
+export interface RBACConfig {
+  enforced: boolean;
+  defaultRoleId: string;
+  superAdminIds: string[];
+}
+
+export interface SerializedRBAC {
+  version: 1;
+  config: RBACConfig;
+  roles: Role[];
+  users: User[];
+}
+
+// ── Workflow Dashboard ───────────────────────────────────────────
+
+export interface WorkflowSummary {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  triggerType?: string;
+  lastRunAt?: string;
+  lastRunStatus?: string;
+  nextRunAt?: string;
+  tags?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Partner / Embedded Applets ────────────────────────────────────
+
+export interface PartnerApplet {
+  id: string;
+  partnerId: string;
+  partnerName: string;
+  partnerLogo?: string;
+  name: string;
+  description: string;
+  category: string;
+  tags: string[];
+  /** Pre-built workflow template */
+  template: {
+    nodes: FlowNode[];
+    edges: FlowEdge[];
+  };
+  /** Configuration the end-user must provide */
+  requiredConfig: AppletConfigField[];
+  /** Consumer-friendly summary of what the applet does */
+  summary: string;
+  /** Usage examples */
+  examples?: string[];
+  /** Popularity / quality signals */
+  installs?: number;
+  rating?: number;
+  verified: boolean;
+  publishedAt: string;
+}
+
+export interface AppletConfigField {
+  key: string;
+  label: string;
+  type: "text" | "select" | "number" | "boolean" | "credential";
+  placeholder?: string;
+  options?: Array<{ label: string; value: string }>;
+  required: boolean;
+  defaultValue?: unknown;
+  helpText?: string;
+}
+
+export interface AppletInstance {
+  id: string;
+  appletId: string;
+  userId?: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+  installedAt: string;
+  lastRunAt?: string;
+}
+
+export interface PartnerRegistry {
+  partners: Array<{
+    id: string;
+    name: string;
+    logo?: string;
+    website?: string;
+    appletCount: number;
+    verified: boolean;
+  }>;
+  applets: PartnerApplet[];
+}
+
+export interface AppletSearchQuery {
+  text?: string;
+  category?: string;
+  partnerId?: string;
+  tags?: string[];
+  verified?: boolean;
+  sortBy?: "popular" | "rating" | "newest" | "name";
+  limit?: number;
+  offset?: number;
+}
+
+export interface AppletSearchResult {
+  applets: PartnerApplet[];
+  total: number;
+  categories: Array<{ name: string; count: number }>;
+}
+
+export interface SerializedAppletStore {
+  version: 1;
+  applets: PartnerApplet[];
+  instances: AppletInstance[];
   exportedAt: string;
 }
 

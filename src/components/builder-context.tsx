@@ -72,6 +72,25 @@ const DEFAULT_LOGIC: NodePaletteItem[] = [
     icon: "Workflow",
     defaultConfig: { workflowId: "", inputMappings: {}, outputMappings: {}, maxDepth: 10 },
   },
+  {
+    type: "schedule",
+    subType: "schedule",
+    label: "Schedule",
+    description: "Time-based trigger",
+    icon: "CalendarClock",
+    defaultConfig: { mode: "interval", interval: { value: 5, unit: "minutes" } },
+  },
+  {
+    type: "database",
+    subType: "database",
+    label: "Database",
+    description: "Query or modify a database",
+    icon: "Database",
+    defaultConfig: {
+      connectorType: "postgresql",
+      operation: { type: "query", sql: "", params: [] },
+    },
+  },
 ];
 
 export interface BuilderContextValue {

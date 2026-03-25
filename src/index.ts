@@ -25,6 +25,17 @@ export type {
   SubWorkflowNodeData,
   SubWorkflowConfig,
   WorkflowResolver,
+  ScheduleNodeData,
+  ScheduleConfig,
+  ScheduleState,
+  ScheduleIntervalConfig,
+  ScheduleCalendarConfig,
+  DatabaseNodeData,
+  DatabaseConfig,
+  DatabaseOperation,
+  DatabaseConnectorType,
+  DatabaseResult,
+  DatabaseAdapter,
   WorkflowNodeData,
   ConditionOperator,
   // Retry
@@ -70,6 +81,22 @@ export type {
   ExecutionStats,
   TimeSeriesBucket,
   SerializedHistory,
+  // RBAC
+  Permission,
+  Role,
+  User,
+  RBACConfig,
+  SerializedRBAC,
+  // Workflow Dashboard
+  WorkflowSummary,
+  // Partner / Embedded Applets
+  PartnerApplet,
+  AppletConfigField,
+  AppletInstance,
+  PartnerRegistry,
+  AppletSearchQuery,
+  AppletSearchResult,
+  SerializedAppletStore,
 } from "./core/types";
 
 export { DEFAULT_OPERATORS } from "./core/types";
@@ -90,6 +117,19 @@ export {
 } from "./core/expression-resolver";
 
 export { cn } from "./core/utils";
+
+// ── Database Connector ───────────────────────────────────────────
+export {
+  QueryBuilder,
+  WhereBuilder,
+  where,
+  sanitizeIdentifier,
+  validateMongoFilter,
+  validateMongoPipeline,
+  type BuiltQuery,
+  type MongoQuery,
+  type OrderByClause,
+} from "./core/database-connector";
 
 // ── Sub-Workflow Validator ────────────────────────────────────────
 export {
@@ -119,6 +159,22 @@ export {
 
 export { ConsoleLogger } from "./core/console-logger";
 
+// ── Scheduler ────────────────────────────────────────────────────
+export {
+  parseCronExpression,
+  getNextCronDate,
+  getNextNDates,
+  validateCronExpression,
+  cronToHumanReadable,
+  calendarToSchedule,
+  intervalToNextDate,
+  scheduleToHumanReadable,
+  ScheduleManager,
+  type CronParts,
+  type CronField,
+  type ScheduleFiredCallback,
+} from "./core/scheduler";
+
 export { ExecutionHistoryStore } from "./core/execution-history";
 
 export {
@@ -144,6 +200,8 @@ export { SwitchNode } from "./components/nodes/switch-node";
 export { LoopNode } from "./components/nodes/loop-node";
 export { TransformNode } from "./components/nodes/transform-node";
 export { SubWorkflowNode } from "./components/nodes/sub-workflow-node";
+export { ScheduleNode } from "./components/nodes/schedule-node";
+export { DatabaseNode } from "./components/nodes/database-node";
 
 // ── Personas & Agents ────────────────────────────────────────────
 export type { CPOPersona, ProductThesis, DecisionHeuristic, StrategicPriority } from "./personas";
@@ -211,6 +269,27 @@ export {
 
 // ── Execution History ────────────────────────────────────────────
 export { ExecutionHistoryPanel, type ExecutionHistoryPanelProps } from "./components/execution-history";
+
+// ── RBAC ─────────────────────────────────────────────────────────
+export {
+  RBACManager,
+  BUILTIN_ADMIN_ROLE,
+  BUILTIN_EDITOR_ROLE,
+  BUILTIN_VIEWER_ROLE,
+  BUILTIN_OPERATOR_ROLE,
+} from "./core/rbac";
+
+export { RBACProvider, RBACContext, useRBAC, type RBACProviderProps } from "./components/rbac-context";
+
+// ── Workflow Dashboard ───────────────────────────────────────────
+export { WorkflowDashboard, type WorkflowDashboardProps } from "./components/workflow-dashboard";
+
+// ── Partner / Embedded Applets ────────────────────────────────────
+export { AppletStore } from "./core/partner-applets";
+export { EXAMPLE_APPLETS } from "./core/example-applets";
+export { AppletMarketplace, type AppletMarketplaceProps } from "./components/applet-marketplace";
+export { AppletConfigModal, type AppletConfigModalProps } from "./components/applet-config-modal";
+export { AppletInstances, type AppletInstancesProps } from "./components/applet-instances";
 
 // ── Built-in connectors ──────────────────────────────────────────
 export { webhookConnector } from "./connectors";

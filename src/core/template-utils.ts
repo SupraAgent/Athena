@@ -11,6 +11,7 @@ import type {
   TemplateValidationResult,
   WorkflowData,
 } from "./types";
+import { stripRuntimeAndSecrets } from "./utils";
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -24,65 +25,12 @@ function nowISO(): string {
   return new Date().toISOString();
 }
 
-/** Fields that carry runtime state and must be stripped on export. */
-const RUNTIME_KEYS = new Set([
-  "runId",
-  "executionState",
-  "lastRunAt",
-  "lastRunStatus",
-  "lastRunError",
-  "lastRunDuration",
-  "_executionOutput",
-  "_retryCount",
-]);
-
-/**
- * Credential reference pattern — `credential:<id>`.
- * We keep these refs but never leak the resolved value.
- */
-const CREDENTIAL_REF_PATTERN = /^credential:.+/;
-
-/** Keys whose values may contain resolved secrets and must be redacted on export. */
-const SECRET_KEY_PATTERN = /token|key|secret|password|authorization/i;
-
-/**
- * Deep-clone an object while stripping runtime keys and resolved
- * credential values (only keeps credential refs).
- * Also redacts values for secret-like keys to prevent leaking
- * resolved credentials into exported templates.
- */
-function stripRuntimeData(obj: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (RUNTIME_KEYS.has(key)) continue;
-
-    if (typeof value === "string" && CREDENTIAL_REF_PATTERN.test(value)) {
-      // Keep the credential reference, it's safe
-      result[key] = value;
-    } else if (typeof value === "string" && SECRET_KEY_PATTERN.test(key)) {
-      // Redact resolved secret values — only credential refs are safe to export
-      result[key] = "";
-    } else if (Array.isArray(value)) {
-      result[key] = value.map((item) =>
-        typeof item === "object" && item !== null
-          ? stripRuntimeData(item as Record<string, unknown>)
-          : item
-      );
-    } else if (typeof value === "object" && value !== null) {
-      result[key] = stripRuntimeData(value as Record<string, unknown>);
-    } else {
-      result[key] = value;
-    }
-  }
-  return result;
-}
-
 function sanitizeNodes(nodes: FlowNode[]): FlowNode[] {
   return nodes.map((node) => ({
     id: node.id,
     type: node.type,
     position: { x: node.position.x, y: node.position.y },
-    data: stripRuntimeData(node.data as unknown as Record<string, unknown>) as unknown as FlowNode["data"],
+    data: stripRuntimeAndSecrets(node.data as unknown as Record<string, unknown>) as unknown as FlowNode["data"],
   }));
 }
 

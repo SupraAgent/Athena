@@ -21,6 +21,9 @@ import type {
   LoopNodeData,
   TransformNodeData,
   SubWorkflowNodeData,
+  ScheduleNodeData,
+  DatabaseNodeData,
+  DatabaseAdapter,
   WorkflowResolver,
   CredentialStore,
   RetryConfig,
@@ -65,6 +68,11 @@ export interface EngineConfig {
    * When a sub_workflow node is encountered, the engine calls this to load the child workflow.
    */
   workflowResolver?: WorkflowResolver;
+  /**
+   * Optional database adapter for database node execution.
+   * Consuming apps provide this to connect to their choice of DB library.
+   */
+  databaseAdapter?: DatabaseAdapter;
 }
 
 /**
@@ -114,6 +122,31 @@ function buildExpressionContext(
     // Environment variables are passed through actionCtx or omitted in non-Node environments
     env: (actionCtx as Record<string, unknown>).env as Record<string, string> | undefined,
   };
+}
+
+/** Keys whose values may contain resolved secrets and must be redacted before persistence. */
+const PERSIST_SECRET_PATTERN = /token|key|secret|password|authorization/i;
+
+/**
+ * Deep-redact secret-like values from nodeOutputs before passing to persistence.
+ * Returns a new object — never mutates the original.
+ */
+function redactForPersistence(obj: unknown): unknown {
+  if (obj === null || obj === undefined) return obj;
+  if (typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(redactForPersistence);
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    if (PERSIST_SECRET_PATTERN.test(key) && typeof value === "string") {
+      result[key] = "[REDACTED]";
+    } else if (typeof value === "object" && value !== null) {
+      result[key] = redactForPersistence(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 /**
@@ -189,6 +222,24 @@ async function executeNode(
   if (data.nodeType === "trigger") {
     emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "trigger", {}));
     const output = { type: "trigger", triggered: true };
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, output as Record<string, unknown>, timing.durationMs)
+    );
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    return {
+      status: "completed",
+      output,
+      timing,
+      nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+    };
+  }
+
+  // ── Schedule: pass through (similar to trigger) ──
+  if (data.nodeType === "schedule") {
+    const scheduleData = data as ScheduleNodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "schedule", { config: scheduleData.config as unknown as Record<string, unknown> }));
+    const output = { type: "schedule", mode: scheduleData.config.mode, triggered: true };
     const timing = buildTiming(nodeId, startedAt);
     emitLog(config.logger, (l) =>
       l.onNodeComplete?.(runId, nodeId, output as Record<string, unknown>, timing.durationMs)
@@ -351,7 +402,7 @@ async function executeNode(
         const tryNode = nodeMap.get(tryNodeId);
         if (!tryNode) continue;
 
-        await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, tryNodeId);
+        await config.persistence.updateRun(runId, "running", redactForPersistence(nodeOutputs) as Record<string, unknown>, undefined, tryNodeId);
 
         // Execute the inner node using the shared function
         const innerResult = await executeNode(tryNode, nctx);
@@ -540,6 +591,116 @@ async function executeNode(
       timing,
       nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
     };
+  }
+
+  // ── Database: execute via adapter ──
+  if (data.nodeType === "database") {
+    const dbData = data as DatabaseNodeData;
+    const dbConfig = dbData.config;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "database", {
+      connectorType: dbConfig.connectorType,
+      operationType: dbConfig.operation.type,
+    }));
+
+    if (!config.databaseAdapter) {
+      const errorMsg = "Database adapter is not configured. Provide databaseAdapter in EngineConfig to execute database nodes.";
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return {
+        status: "failed",
+        output: { success: false, error: errorMsg, durationMs: timing.durationMs },
+        timing,
+        nextNodes: [],
+        error: errorMsg,
+      };
+    }
+
+    // Resolve expression params for the query operation
+    const exprCtx = buildExpressionContext(nodeOutputs, actionCtx);
+    const resolvedParams: Record<string, unknown> = {};
+
+    if (dbConfig.operation.type === "query" && dbConfig.operation.params) {
+      for (const param of dbConfig.operation.params) {
+        if (param.expression) {
+          const cleanExpr = param.expression.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+          resolvedParams[param.name] = resolveExpr(cleanExpr, exprCtx);
+        }
+      }
+    }
+
+    // Resolve expression values for insert/update operations
+    if (dbConfig.operation.type === "insert" || dbConfig.operation.type === "update") {
+      for (const [key, expr] of Object.entries(dbConfig.operation.values)) {
+        if (expr) {
+          const cleanExpr = expr.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+          resolvedParams[key] = resolveExpr(cleanExpr, exprCtx);
+        }
+      }
+    }
+
+    // Resolve where expressions for update/delete
+    if ((dbConfig.operation.type === "update" || dbConfig.operation.type === "delete") && dbConfig.operation.where) {
+      const cleanExpr = dbConfig.operation.where.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+      resolvedParams["_where"] = resolveExpr(cleanExpr, exprCtx);
+    }
+
+    // Resolve filter expressions for MongoDB find
+    if (dbConfig.operation.type === "find" && dbConfig.operation.filter) {
+      try {
+        const filterStr = resolveTemplate(dbConfig.operation.filter, actionCtx.vars as Record<string, string | number | undefined>);
+        resolvedParams["_filter"] = JSON.parse(filterStr);
+      } catch {
+        resolvedParams["_filter"] = {};
+      }
+    }
+
+    // Resolve pipeline expressions for MongoDB aggregate
+    if (dbConfig.operation.type === "aggregate" && dbConfig.operation.pipeline) {
+      try {
+        const pipelineStr = resolveTemplate(dbConfig.operation.pipeline, actionCtx.vars as Record<string, string | number | undefined>);
+        resolvedParams["_pipeline"] = JSON.parse(pipelineStr);
+      } catch {
+        resolvedParams["_pipeline"] = [];
+      }
+    }
+
+    try {
+      const dbResult = await config.databaseAdapter.execute(dbConfig, resolvedParams);
+      const timing = buildTiming(nodeId, startedAt);
+
+      if (!dbResult.success) {
+        emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, dbResult.error ?? "Database operation failed", false, 0));
+        return {
+          status: "failed",
+          output: dbResult,
+          timing,
+          nextNodes: [],
+          error: dbResult.error,
+        };
+      }
+
+      emitLog(config.logger, (l) =>
+        l.onNodeComplete?.(runId, nodeId, dbResult as unknown as Record<string, unknown>, timing.durationMs)
+      );
+      const nextEdges = outEdges.get(nodeId) ?? [];
+      return {
+        status: "completed",
+        output: dbResult,
+        timing,
+        nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return {
+        status: "failed",
+        output: { success: false, error: errorMsg, durationMs: timing.durationMs },
+        timing,
+        nextNodes: [],
+        error: errorMsg,
+      };
+    }
   }
 
   // ── Sub-Workflow: resolve and execute child workflow ──
@@ -807,7 +968,7 @@ async function runBfsLoop(params: BfsParams): Promise<RunResult> {
       const node = nodeMap.get(nodeId);
       if (!node) continue;
 
-      await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, nodeId);
+      await config.persistence.updateRun(runId, "running", redactForPersistence(nodeOutputs) as Record<string, unknown>, undefined, nodeId);
 
       const result = await executeNode(node, nctx);
 
@@ -821,7 +982,7 @@ async function runBfsLoop(params: BfsParams): Promise<RunResult> {
         await config.persistence.updateRun(
           runId,
           "paused",
-          { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
+          { ...(redactForPersistence(nodeOutputs) as Record<string, unknown>), _resume_targets: nextNodeIds, _resume_at: resumeAt },
           undefined,
           nodeId
         );
@@ -838,7 +999,7 @@ async function runBfsLoop(params: BfsParams): Promise<RunResult> {
         await config.persistence.updateRun(
           runId,
           "paused",
-          { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
+          { ...(redactForPersistence(nodeOutputs) as Record<string, unknown>), _resume_targets: nextNodeIds, _resume_at: resumeAt },
           undefined,
           delayNodeId
         );
@@ -860,7 +1021,7 @@ async function runBfsLoop(params: BfsParams): Promise<RunResult> {
       }
     }
 
-    await config.persistence.updateRun(runId, "completed", nodeOutputs);
+    await config.persistence.updateRun(runId, "completed", redactForPersistence(nodeOutputs) as Record<string, unknown>);
     if (config.persistence.onWorkflowComplete) {
       await config.persistence.onWorkflowComplete(workflowId);
     }
@@ -869,7 +1030,7 @@ async function runBfsLoop(params: BfsParams): Promise<RunResult> {
     return { runId, status: "completed", nodeOutputs, nodeTimings };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    await config.persistence.updateRun(runId, "failed", nodeOutputs, errorMsg);
+    await config.persistence.updateRun(runId, "failed", redactForPersistence(nodeOutputs) as Record<string, unknown>, errorMsg);
     emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "failed", Date.now() - workflowStartTime));
     return { runId, status: "failed", nodeOutputs, nodeTimings, error: errorMsg };
   }
@@ -919,10 +1080,10 @@ export async function executeWorkflow(
     ...context,
   };
 
-  // Find trigger node (entry point)
-  const triggerNode = nodes.find((n) => n.type === "trigger");
+  // Find trigger node (entry point) — either a "trigger" or "schedule" node
+  const triggerNode = nodes.find((n) => n.type === "trigger" || n.type === "schedule");
   if (!triggerNode) {
-    await config.persistence.updateRun(runId, "failed", nodeOutputs, "No trigger node found");
+    await config.persistence.updateRun(runId, "failed", redactForPersistence(nodeOutputs) as Record<string, unknown>, "No trigger node found");
     return { runId, status: "failed", nodeOutputs, nodeTimings, error: "No trigger node found" };
   }
 
@@ -981,7 +1142,7 @@ export async function resumeWorkflow(
     ...context,
   };
 
-  await config.persistence.updateRun(runId, "running", nodeOutputs);
+  await config.persistence.updateRun(runId, "running", redactForPersistence(nodeOutputs) as Record<string, unknown>);
 
   return runBfsLoop({
     runId,
@@ -1103,26 +1264,54 @@ const CREDENTIAL_REF_PATTERN = /^credential:(.+)$/;
 /**
  * Resolve credential references in action config.
  * Values matching `credential:<id>` are replaced with the real secret
- * from the credential store. Only string values are checked.
- * The resolved config is a shallow copy — the original is never mutated.
+ * from the credential store. Recursively traverses nested objects and arrays.
+ * The resolved config is a deep copy — the original is never mutated.
  */
 async function resolveCredentials(
   config: Record<string, unknown>,
-  store: CredentialStore
+  store: CredentialStore,
+  depth = 0
 ): Promise<Record<string, unknown>> {
-  const resolved: Record<string, unknown> = { ...config };
+  if (depth > 10) return config; // prevent infinite recursion
 
-  for (const [key, value] of Object.entries(resolved)) {
-    if (typeof value !== "string") continue;
-    const match = CREDENTIAL_REF_PATTERN.exec(value);
-    if (!match) continue;
+  const resolved: Record<string, unknown> = {};
 
-    const credentialId = match[1];
-    const secret = await store.resolve(credentialId);
-    if (secret === undefined) {
-      throw new Error(`Credential "${credentialId}" not found for config key "${key}"`);
+  for (const [key, value] of Object.entries(config)) {
+    if (typeof value === "string") {
+      const match = CREDENTIAL_REF_PATTERN.exec(value);
+      if (match) {
+        const credentialId = match[1];
+        const secret = await store.resolve(credentialId);
+        if (secret === undefined) {
+          throw new Error(`Credential "${credentialId}" not found for config key "${key}"`);
+        }
+        resolved[key] = secret;
+      } else {
+        resolved[key] = value;
+      }
+    } else if (Array.isArray(value)) {
+      const resolvedArr: unknown[] = [];
+      for (const item of value) {
+        if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+          resolvedArr.push(await resolveCredentials(item as Record<string, unknown>, store, depth + 1));
+        } else if (typeof item === "string") {
+          const match = CREDENTIAL_REF_PATTERN.exec(item);
+          if (match) {
+            const secret = await store.resolve(match[1]);
+            resolvedArr.push(secret ?? item);
+          } else {
+            resolvedArr.push(item);
+          }
+        } else {
+          resolvedArr.push(item);
+        }
+      }
+      resolved[key] = resolvedArr;
+    } else if (typeof value === "object" && value !== null) {
+      resolved[key] = await resolveCredentials(value as Record<string, unknown>, store, depth + 1);
+    } else {
+      resolved[key] = value;
     }
-    resolved[key] = secret;
   }
 
   return resolved;
@@ -1234,21 +1423,31 @@ async function executeActionWithRetry(
 
     if (lastResult.success) return lastResult;
 
-    // Don't retry validation/config errors
-    const err = lastResult.error ?? "";
-    if (
-      err.includes("not found") ||
-      err.includes("No ") ||
-      err.includes("Invalid") ||
-      err.includes("Unknown")
-    ) {
+    // Don't retry non-transient errors.
+    // Check the ActionResult for an explicit retryable flag first;
+    // fall back to pattern matching only if the flag is not set.
+    if (lastResult.retryable === false) {
       break;
+    }
+    if (lastResult.retryable === undefined) {
+      const errLower = (lastResult.error ?? "").toLowerCase();
+      if (
+        errLower.startsWith("invalid ") ||
+        errLower.startsWith("unknown ") ||
+        errLower.startsWith("missing ") ||
+        errLower.includes("unauthorized") ||
+        errLower.includes("forbidden") ||
+        errLower.includes("not found")
+      ) {
+        break;
+      }
     }
 
     const willRetry = attempt < maxRetries;
+    const errorMsg = lastResult.error ?? "Unknown error";
     if (nodeId) {
       emitLog(engineConfig.logger, (l) =>
-        l.onNodeError?.(ctx.runId, nodeId, err, willRetry, attempt + 1)
+        l.onNodeError?.(ctx.runId, nodeId, errorMsg, willRetry, attempt + 1)
       );
     }
 
@@ -1311,10 +1510,26 @@ function evalSingleCondition(
     case "contains": return actual.toLowerCase().includes(expected.toLowerCase());
     case "not_contains": return !actual.toLowerCase().includes(expected.toLowerCase());
     case "starts_with": return actual.toLowerCase().startsWith(expected.toLowerCase());
-    case "gt": return Number(actual) > Number(expected);
-    case "lt": return Number(actual) < Number(expected);
-    case "gte": return Number(actual) >= Number(expected);
-    case "lte": return Number(actual) <= Number(expected);
+    case "gt":
+    case "lt":
+    case "gte":
+    case "lte": {
+      // Use numeric comparison when both sides are valid numbers,
+      // otherwise fall back to lexicographic comparison
+      const numActual = Number(actual);
+      const numExpected = Number(expected);
+      if (!Number.isNaN(numActual) && !Number.isNaN(numExpected)) {
+        if (operator === "gt") return numActual > numExpected;
+        if (operator === "lt") return numActual < numExpected;
+        if (operator === "gte") return numActual >= numExpected;
+        return numActual <= numExpected; // lte
+      }
+      // Non-numeric: lexicographic
+      if (operator === "gt") return actual > expected;
+      if (operator === "lt") return actual < expected;
+      if (operator === "gte") return actual >= expected;
+      return actual <= expected; // lte
+    }
     case "is_empty": return actual === "" || actual === "undefined";
     case "is_not_empty": return actual !== "" && actual !== "undefined";
     default: return false;
@@ -1371,11 +1586,30 @@ async function executeCodeNode(
       return { success: false, error: "Code execution error: dynamic import() is not allowed" };
     }
 
+    // Reject code that accesses constructor chains (primary sandbox escape vector)
+    if (/\bconstructor\b/.test(code)) {
+      return { success: false, error: "Code execution error: 'constructor' access is not allowed" };
+    }
+
+    // Reject code that accesses prototype chains
+    if (/__proto__|\.prototype\b/.test(code)) {
+      return { success: false, error: "Code execution error: prototype access is not allowed" };
+    }
+
+    // Reject code that accesses arguments.callee (escape via arguments.callee.constructor)
+    if (/\barguments\s*\.\s*callee\b/.test(code)) {
+      return { success: false, error: "Code execution error: arguments.callee is not allowed" };
+    }
+
+    // Freeze input and context to prevent prototype chain traversal on passed objects
+    const frozenInput = input !== null && typeof input === "object" ? Object.freeze(JSON.parse(JSON.stringify(input))) : input;
+    const frozenContext = context !== null && typeof context === "object" ? Object.freeze(JSON.parse(JSON.stringify(context))) : context;
+
     const sandboxedFn = new Function(
       "input",
       "context",
       `"use strict";
-      // Block access to dangerous globals
+      // Block access to dangerous globals and escape hatches
       const process = undefined;
       const require = undefined;
       const fetch = undefined;
@@ -1388,11 +1622,15 @@ async function executeCodeNode(
       const eval = undefined;
       const Function = undefined;
       const constructor = undefined;
+      const Proxy = undefined;
+      const Reflect = undefined;
+      const Symbol = undefined;
       return (async () => { ${code} })();`
     );
 
-    // Call with null `this` to prevent global object leakage via `this`
-    const resultPromise = sandboxedFn.call(null, input, context);
+    // Call with Object.create(null) as `this` — has no prototype chain at all,
+    // preventing escape via this.constructor.constructor("return process")()
+    const resultPromise = sandboxedFn.call(Object.create(null), frozenInput, frozenContext);
 
     // Enforce timeout using Promise.race
     const timeoutPromise = new Promise<never>((_, reject) => {
@@ -1566,12 +1804,25 @@ async function executeLoopNode(
       l.onNodeStart?.(runId, `${loopNodeId}_iter_${i}`, "loop_iteration", { index: i, item: currentItem as Record<string, unknown> })
     );
 
-    // Execute body branch nodes for this iteration (BFS)
+    // Execute body branch nodes for this iteration via shared executeNode (BFS)
+    // This ensures ALL node types (action, code, condition, switch, transform,
+    // sub_workflow, try_catch) work inside loops — no manual duplication.
     const bodyQueue = [...bodyTargets];
     const bodyVisited = new Set<string>();
     let iterationOutput: unknown = null;
     let iterationFailed = false;
     let iterationError: string | undefined;
+
+    const bodyNctx: NodeExecContext = {
+      runId,
+      actionCtx: ctx,
+      config,
+      nodeOutputs,
+      nodeTimings,
+      outEdges,
+      nodeMap,
+      visited: bodyVisited,
+    };
 
     while (bodyQueue.length > 0) {
       const bodyNodeId = bodyQueue.shift()!;
@@ -1581,116 +1832,37 @@ async function executeLoopNode(
       const bodyNode = nodeMap.get(bodyNodeId);
       if (!bodyNode) continue;
 
-      const bodyStartedAt = new Date();
-      const bodyData = bodyNode.data;
-
-      if (bodyData.nodeType === "action") {
-        const actionData = bodyData as ActionNodeData;
-
-        // Rate limiting in loop body
-        if (config.rateLimiter) {
-          let rateLimitResult;
-          try {
-            rateLimitResult = await config.rateLimiter.acquire(actionData.actionType);
-          } catch (rateLimitErr) {
-            // "fail" strategy throws — treat as iteration failure rather than crashing the whole workflow
-            const failOutput = { skipped: true, reason: "rate_limited", error: rateLimitErr instanceof Error ? rateLimitErr.message : String(rateLimitErr) };
-            nodeOutputs[bodyNodeId] = failOutput;
-            recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
-            emitLog(config.logger, (l) =>
-              l.onRateLimited?.(runId, bodyNodeId, actionData.actionType, "fail", 0)
-            );
-            emitLog(config.logger, (l) => l.onNodeError?.(runId, bodyNodeId, failOutput.error, false, 0));
-            iterationFailed = true;
-            iterationError = failOutput.error;
-            break;
-          }
-          if (!rateLimitResult.allowed) {
-            const skipOutput = { skipped: true, reason: "rate_limited" };
-            nodeOutputs[bodyNodeId] = skipOutput;
-            recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
-            emitLog(config.logger, (l) =>
-              l.onRateLimited?.(runId, bodyNodeId, actionData.actionType, "skip", rateLimitResult.waitedMs)
-            );
-            emitLog(config.logger, (l) => l.onNodeSkipped?.(runId, bodyNodeId, "rate_limited"));
-            iterationOutput = skipOutput;
-            // Enqueue downstream edges within body
-            const bodyEdges = outEdges.get(bodyNodeId) ?? [];
-            for (const be of bodyEdges) bodyQueue.push(be.target);
-            continue;
-          }
-          if (rateLimitResult.waitedMs > 0) {
-            emitLog(config.logger, (l) =>
-              l.onRateLimited?.(runId, bodyNodeId, actionData.actionType, "wait", rateLimitResult.waitedMs)
-            );
-          }
-        }
-
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, bodyNodeId, "action", actionData.config));
-        const result = await executeActionWithRetry(
-          actionData.actionType, actionData.config, ctx, config, actionData.retryConfig, bodyNodeId, nodeOutputs
-        );
-        nodeOutputs[bodyNodeId] = result;
-        recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
-
-        if (!result.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, bodyNodeId, result.error ?? "Unknown error", false, 0));
-          iterationFailed = true;
-          iterationError = result.error ?? `Action node ${bodyNodeId} failed in loop iteration ${i}`;
-          break;
-        }
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, bodyNodeId, result.output ?? {}, nodeTimings[bodyNodeId].durationMs)
-        );
-        iterationOutput = result.output;
-      } else if (bodyData.nodeType === "code") {
-        const codeData = bodyData as CodeNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, bodyNodeId, "code", { language: codeData.config.language }));
-        const result = await executeCodeNode(codeData, nodeOutputs, ctx);
-        nodeOutputs[bodyNodeId] = result;
-        recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
-
-        if (!result.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, bodyNodeId, result.error ?? "Code execution failed", false, 0));
-          iterationFailed = true;
-          iterationError = result.error ?? `Code node ${bodyNodeId} failed in loop iteration ${i}`;
-          break;
-        }
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, bodyNodeId, result.output ?? {}, nodeTimings[bodyNodeId].durationMs)
-        );
-        iterationOutput = result.output;
-      } else if (bodyData.nodeType === "condition") {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, bodyNodeId, "condition", (bodyData as ConditionNodeData).config as unknown as Record<string, unknown>));
-        const condResult = evaluateCondition(bodyData as ConditionNodeData, ctx, nodeOutputs);
-        nodeOutputs[bodyNodeId] = { condition: condResult };
-        recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, bodyNodeId, { condition: condResult }, nodeTimings[bodyNodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(bodyNodeId) ?? [];
-        const targetHandle = condResult ? "true" : "false";
-        for (const e of nextEdges) {
-          if (e.sourceHandle === targetHandle) bodyQueue.push(e.target);
-        }
-        continue;
-      } else {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, bodyNodeId, bodyData.nodeType, {}));
-        nodeOutputs[bodyNodeId] = { type: bodyData.nodeType, passthrough: true };
-        recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, bodyNodeId, nodeOutputs[bodyNodeId] as Record<string, unknown>, nodeTimings[bodyNodeId].durationMs)
-        );
+      // Delay nodes are not allowed inside loops (would pause the entire workflow)
+      if (bodyNode.data.nodeType === "delay") {
+        iterationFailed = true;
+        iterationError = `Delay nodes are not supported inside loop bodies (node ${bodyNodeId})`;
+        break;
       }
 
-      // Enqueue downstream body edges (but NOT loop "complete" edges)
-      if (!iterationFailed) {
-        const nextEdges = outEdges.get(bodyNodeId) ?? [];
-        for (const e of nextEdges) {
-          // Don't re-enter the loop node itself or escape to "complete" path
-          if (e.target !== loopNodeId) {
-            bodyQueue.push(e.target);
-          }
+      const result = await executeNode(bodyNode, bodyNctx);
+
+      // Store output
+      nodeOutputs[bodyNodeId] = result.output;
+      nodeTimings[bodyNodeId] = result.timing;
+
+      if (result.status === "failed") {
+        iterationFailed = true;
+        iterationError = result.error ?? `Node ${bodyNodeId} failed in loop iteration ${i}`;
+        break;
+      }
+
+      if (result.status === "paused") {
+        iterationFailed = true;
+        iterationError = `Node ${bodyNodeId} caused a pause inside loop iteration ${i}, which is not supported`;
+        break;
+      }
+
+      iterationOutput = result.output;
+
+      // Enqueue downstream body edges (but NOT back to the loop node)
+      for (const next of result.nextNodes) {
+        if (next.nodeId !== loopNodeId) {
+          bodyQueue.push(next.nodeId);
         }
       }
     }
