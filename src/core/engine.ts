@@ -16,18 +16,28 @@ import type {
   ActionNodeData,
   ConditionNodeData,
   DelayNodeData,
-  TryCatchNodeData,
   CodeNodeData,
   SwitchNodeData,
   LoopNodeData,
+  TransformNodeData,
+  SubWorkflowNodeData,
+  WorkflowResolver,
   CredentialStore,
   RetryConfig,
   NodeTiming,
   ExecutionLogger,
-  StreamChunk,
   StreamingActionResult,
   OnStreamCallback,
 } from "./types";
+import { applyTransformPipeline } from "./data-mapper";
+import {
+  resolveExpression as resolveExpr,
+  resolveTemplate,
+  resolveAllValues,
+  type ExpressionContext,
+} from "./expression-resolver";
+import type { TokenBucketRateLimiter } from "./rate-limiter";
+import { validateSubWorkflow } from "./sub-workflow-validator";
 
 export interface EngineConfig {
   /** Executes action nodes — provided by consuming app */
@@ -44,6 +54,17 @@ export interface EngineConfig {
   logger?: ExecutionLogger;
   /** Optional callback invoked for each chunk when an action returns a stream */
   onStream?: OnStreamCallback;
+  /**
+   * Optional injectable rate limiter instance.
+   * Shared across workflow runs so real API rate limits are respected.
+   * Before each action node, the engine calls rateLimiter.acquire(actionType).
+   */
+  rateLimiter?: TokenBucketRateLimiter;
+  /**
+   * Optional workflow resolver for sub-workflow execution.
+   * When a sub_workflow node is encountered, the engine calls this to load the child workflow.
+   */
+  workflowResolver?: WorkflowResolver;
 }
 
 /**
@@ -60,6 +81,42 @@ export function defaultRenderTemplate(
 }
 
 /**
+ * Build an ExpressionContext from the engine's runtime state.
+ * This bridges the engine's internal representation to the expression resolver's interface.
+ */
+function buildExpressionContext(
+  nodeOutputs: Record<string, unknown>,
+  actionCtx: ActionContext,
+  credentialValues?: Record<string, Record<string, string>>,
+): ExpressionContext {
+  // Convert nodeOutputs to the expected Record<string, Record<string, unknown>> shape.
+  // Each node output may be a plain object or an ActionResult with an `output` field.
+  const normalizedOutputs: Record<string, Record<string, unknown>> = {};
+  for (const [nodeId, value] of Object.entries(nodeOutputs)) {
+    if (nodeId.startsWith("_")) continue; // skip internal keys like _resume_targets
+    if (value != null && typeof value === "object") {
+      normalizedOutputs[nodeId] = value as Record<string, unknown>;
+    } else if (value !== undefined) {
+      normalizedOutputs[nodeId] = { value };
+    }
+  }
+
+  // Build vars: merge actionCtx.vars, converting all values to unknown for the resolver
+  const vars: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(actionCtx.vars)) {
+    vars[key] = val;
+  }
+
+  return {
+    nodeOutputs: normalizedOutputs,
+    vars,
+    credentials: credentialValues,
+    // Environment variables are passed through actionCtx or omitted in non-Node environments
+    env: (actionCtx as Record<string, unknown>).env as Record<string, string> | undefined,
+  };
+}
+
+/**
  * Safely invoke a logger callback. A buggy logger must never crash a workflow.
  */
 function emitLog(logger: ExecutionLogger | undefined, fn: (l: ExecutionLogger) => void): void {
@@ -70,6 +127,755 @@ function emitLog(logger: ExecutionLogger | undefined, fn: (l: ExecutionLogger) =
     // Swallow — logger errors must never propagate
   }
 }
+
+// ── Shared node execution result type ────────────────────────────
+
+/**
+ * Result of executing a single node. Tells the BFS loop what to do next.
+ */
+interface NodeExecutionResult {
+  /** "completed" = enqueue nextNodes, "paused" = stop BFS and return paused, "failed" = skip downstream */
+  status: "completed" | "paused" | "failed";
+  /** The output to store in nodeOutputs[nodeId] */
+  output: unknown;
+  /** Timing for this node */
+  timing: NodeTiming;
+  /** Downstream nodes to enqueue (already filtered by handle logic) */
+  nextNodes: Array<{ nodeId: string; viaHandle?: string }>;
+  /** Error message if status is "failed" */
+  error?: string;
+  /**
+   * For delay nodes: pause config that the BFS loop uses to persist pause state.
+   * Contains the computed resumeAt and the raw next edge targets.
+   */
+  pauseConfig?: { resumeAt: string; nextNodeIds: string[] };
+  /**
+   * For try_catch nodes: if a delay inside the try branch caused a pause,
+   * this contains the pause details. The BFS loop should return paused.
+   */
+  tryCatchPause?: { resumeAt: string; nextNodeIds: string[]; delayNodeId: string };
+}
+
+/**
+ * Context passed to executeNode — bundles all the shared state the node handlers need.
+ */
+interface NodeExecContext {
+  runId: string;
+  actionCtx: ActionContext;
+  config: EngineConfig;
+  nodeOutputs: Record<string, unknown>;
+  nodeTimings: Record<string, NodeTiming>;
+  outEdges: Map<string, FlowEdge[]>;
+  nodeMap: Map<string, FlowNode>;
+  visited: Set<string>;
+}
+
+// ── Shared executeNode ───────────────────────────────────────────
+
+/**
+ * Execute a single node and return a result that tells the BFS loop what to do.
+ * This is the shared core that both executeWorkflow and resumeWorkflow call.
+ */
+async function executeNode(
+  node: FlowNode,
+  nctx: NodeExecContext,
+): Promise<NodeExecutionResult> {
+  const { runId, actionCtx, config, nodeOutputs, nodeTimings, outEdges, nodeMap, visited } = nctx;
+  const nodeId = node.id;
+  const startedAt = new Date();
+  const data = node.data;
+
+  // ── Trigger: pass through ──
+  if (data.nodeType === "trigger") {
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "trigger", {}));
+    const output = { type: "trigger", triggered: true };
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, output as Record<string, unknown>, timing.durationMs)
+    );
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    return {
+      status: "completed",
+      output,
+      timing,
+      nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+    };
+  }
+
+  // ── Action: execute via plugin ──
+  if (data.nodeType === "action") {
+    const actionData = data as ActionNodeData;
+
+    // Rate limiting: acquire token before executing the action
+    if (config.rateLimiter) {
+      let rateLimitResult;
+      try {
+        rateLimitResult = await config.rateLimiter.acquire(actionData.actionType);
+      } catch (rateLimitErr) {
+        // "fail" strategy throws — return a proper node failure instead of crashing the BFS
+        const errorMsg = rateLimitErr instanceof Error ? rateLimitErr.message : String(rateLimitErr);
+        const timing = buildTiming(nodeId, startedAt);
+        emitLog(config.logger, (l) =>
+          l.onRateLimited?.(runId, nodeId, actionData.actionType, "fail", 0)
+        );
+        emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+        return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+      }
+      if (!rateLimitResult.allowed) {
+        // Skip or wait-timeout strategy returned false — skip this action
+        const skipOutput = { skipped: true, reason: "rate_limited" };
+        const timing = buildTiming(nodeId, startedAt);
+        emitLog(config.logger, (l) =>
+          l.onRateLimited?.(runId, nodeId, actionData.actionType, "skip", rateLimitResult.waitedMs)
+        );
+        emitLog(config.logger, (l) => l.onNodeSkipped?.(runId, nodeId, "rate_limited"));
+        const nextEdges = outEdges.get(nodeId) ?? [];
+        return {
+          status: "completed",
+          output: skipOutput,
+          timing,
+          nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+        };
+      }
+      if (rateLimitResult.waitedMs > 0) {
+        emitLog(config.logger, (l) =>
+          l.onRateLimited?.(runId, nodeId, actionData.actionType, "wait", rateLimitResult.waitedMs)
+        );
+      }
+    }
+
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "action", actionData.config));
+    const result = await executeActionWithRetry(
+      actionData.actionType,
+      actionData.config,
+      actionCtx,
+      config,
+      actionData.retryConfig,
+      nodeId,
+      nodeOutputs
+    );
+    const timing = buildTiming(nodeId, startedAt);
+
+    if (!result.success) {
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, result.error ?? "Unknown error", false, 0));
+      return { status: "failed", output: result, timing, nextNodes: [], error: result.error };
+    }
+
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, result.output ?? {}, timing.durationMs)
+    );
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    return {
+      status: "completed",
+      output: result,
+      timing,
+      nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+    };
+  }
+
+  // ── Condition: evaluate and branch ──
+  if (data.nodeType === "condition") {
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "condition", (data as ConditionNodeData).config as unknown as Record<string, unknown>));
+    const condResult = evaluateCondition(data as ConditionNodeData, actionCtx, nodeOutputs);
+    const output = { condition: condResult };
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, { condition: condResult }, timing.durationMs)
+    );
+
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    const targetHandle = condResult ? "true" : "false";
+    const skippedHandle = condResult ? "false" : "true";
+    const nextNodes: Array<{ nodeId: string; viaHandle?: string }> = [];
+    for (const e of nextEdges) {
+      if (e.sourceHandle === targetHandle) {
+        nextNodes.push({ nodeId: e.target, viaHandle: targetHandle });
+      } else if (e.sourceHandle === skippedHandle) {
+        emitLog(config.logger, (l) =>
+          l.onNodeSkipped?.(runId, e.target, `Condition "${nodeId}" evaluated to ${condResult}`)
+        );
+      }
+    }
+    return { status: "completed", output, timing, nextNodes };
+  }
+
+  // ── Delay: pause the run ──
+  if (data.nodeType === "delay") {
+    const delayData = data as DelayNodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "delay", delayData.config as unknown as Record<string, unknown>));
+    const cfg = delayData.config;
+    const delayMs = computeDelayMs(cfg.duration, cfg.unit);
+    const resumeAt = new Date(Date.now() + delayMs).toISOString();
+    const output = { delay: true, resumeAt, unit: cfg.unit, duration: cfg.duration };
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, output as unknown as Record<string, unknown>, timing.durationMs)
+    );
+
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    const nextNodeIds = nextEdges.map((e) => e.target);
+
+    return {
+      status: "paused",
+      output,
+      timing,
+      nextNodes: [],
+      pauseConfig: { resumeAt, nextNodeIds },
+    };
+  }
+
+  // ── Try-Catch: execute try branch, route to catch on failure ──
+  if (data.nodeType === "try_catch") {
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "try_catch", {}));
+    const allEdges = outEdges.get(nodeId) ?? [];
+
+    const tryTargets = allEdges
+      .filter((e) => e.sourceHandle === "success")
+      .map((e) => e.target);
+    const catchTargets = allEdges
+      .filter((e) => e.sourceHandle === "error")
+      .map((e) => e.target);
+
+    let tryCatchError: string | undefined;
+    const tryQueue = [...tryTargets];
+    const tryVisited = new Set<string>();
+    let tryFailed = false;
+
+    try {
+      while (tryQueue.length > 0) {
+        const tryNodeId = tryQueue.shift()!;
+        if (tryVisited.has(tryNodeId) || visited.has(tryNodeId)) continue;
+        tryVisited.add(tryNodeId);
+        visited.add(tryNodeId);
+
+        const tryNode = nodeMap.get(tryNodeId);
+        if (!tryNode) continue;
+
+        await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, tryNodeId);
+
+        // Execute the inner node using the shared function
+        const innerResult = await executeNode(tryNode, nctx);
+        nodeOutputs[tryNodeId] = innerResult.output;
+        nodeTimings[tryNodeId] = innerResult.timing;
+
+        if (innerResult.status === "paused") {
+          // Delay inside try-catch: propagate pause to the outer BFS
+          const timing = buildTiming(nodeId, startedAt);
+          return {
+            status: "paused",
+            output: { type: "try_catch", trySucceeded: false, error: undefined },
+            timing,
+            nextNodes: [],
+            tryCatchPause: {
+              resumeAt: innerResult.pauseConfig!.resumeAt,
+              nextNodeIds: innerResult.pauseConfig!.nextNodeIds,
+              delayNodeId: tryNodeId,
+            },
+          };
+        }
+
+        if (innerResult.status === "failed") {
+          tryCatchError = innerResult.error ?? `Action node ${tryNodeId} failed`;
+          tryFailed = true;
+          break;
+        }
+
+        // Enqueue downstream edges within try branch
+        for (const next of innerResult.nextNodes) {
+          tryQueue.push(next.nodeId);
+        }
+      }
+    } catch (err) {
+      tryFailed = true;
+      tryCatchError = err instanceof Error ? err.message : String(err);
+    }
+
+    const output = {
+      type: "try_catch",
+      trySucceeded: !tryFailed,
+      error: tryCatchError,
+    };
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, output as unknown as Record<string, unknown>, timing.durationMs)
+    );
+
+    const nextNodes: Array<{ nodeId: string; viaHandle?: string }> = [];
+    if (tryFailed) {
+      actionCtx.vars._tryCatchError = tryCatchError ?? "Unknown error";
+      for (const catchTarget of catchTargets) {
+        nextNodes.push({ nodeId: catchTarget, viaHandle: "error" });
+      }
+    }
+
+    return { status: "completed", output, timing, nextNodes };
+  }
+
+  // ── Code: execute user code in a sandbox ──
+  if (data.nodeType === "code") {
+    const codeData = data as CodeNodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "code", { language: codeData.config.language }));
+    const codeResult = await executeCodeNode(codeData, nodeOutputs, actionCtx);
+    const timing = buildTiming(nodeId, startedAt);
+
+    if (!codeResult.success) {
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, codeResult.error ?? "Code execution failed", false, 0));
+      return { status: "failed", output: codeResult, timing, nextNodes: [], error: codeResult.error };
+    }
+
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, codeResult.output ?? {}, timing.durationMs)
+    );
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    return {
+      status: "completed",
+      output: codeResult,
+      timing,
+      nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+    };
+  }
+
+  // ── Switch: evaluate expression and route to matching case ──
+  if (data.nodeType === "switch") {
+    const switchData = data as SwitchNodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "switch", { expression: switchData.config.expression }));
+    const switchResult = executeSwitchNode(switchData, nodeOutputs, actionCtx, config);
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, switchResult as unknown as Record<string, unknown>, timing.durationMs)
+    );
+
+    const matchedHandle = switchResult.matchedCase;
+    const nextNodes: Array<{ nodeId: string; viaHandle?: string }> = [];
+    if (matchedHandle) {
+      const nextEdges = outEdges.get(nodeId) ?? [];
+      for (const e of nextEdges) {
+        if (e.sourceHandle === matchedHandle) {
+          nextNodes.push({ nodeId: e.target, viaHandle: matchedHandle });
+        } else {
+          emitLog(config.logger, (l) =>
+            l.onNodeSkipped?.(runId, e.target, `Switch "${nodeId}" routed to "${matchedHandle}"`)
+          );
+        }
+      }
+    }
+    return { status: "completed", output: switchResult, timing, nextNodes };
+  }
+
+  // ── Loop: iterate over array and execute body branch ──
+  if (data.nodeType === "loop") {
+    const loopData = data as LoopNodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "loop", { arrayExpression: loopData.config.arrayExpression }));
+    const loopResult = await executeLoopNode(
+      loopData, nodeOutputs, actionCtx, config, outEdges, nodeMap, nodeId, visited, nodeTimings, runId, startedAt
+    );
+    const timing = buildTiming(nodeId, startedAt);
+
+    if (!loopResult.success) {
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, loopResult.error ?? "Loop execution failed", false, 0));
+      return { status: "failed", output: loopResult, timing, nextNodes: [], error: loopResult.error };
+    }
+
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, loopResult.output ?? {}, timing.durationMs)
+    );
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    const nextNodes: Array<{ nodeId: string; viaHandle?: string }> = [];
+    for (const e of nextEdges) {
+      if (e.sourceHandle === "complete") {
+        nextNodes.push({ nodeId: e.target, viaHandle: "complete" });
+      }
+    }
+    return { status: "completed", output: loopResult, timing, nextNodes };
+  }
+
+  // ── Transform: apply data transformation pipeline ──
+  if (data.nodeType === "transform") {
+    const transformData = data as TransformNodeData;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "transform", { inputExpression: transformData.config.inputExpression }));
+
+    // Resolve input data from upstream using the expression resolver
+    const exprCtx = buildExpressionContext(nodeOutputs, actionCtx);
+    let resolvedInput: unknown;
+    const inputExpr = transformData.config.inputExpression;
+    if (inputExpr) {
+      // Strip template delimiters if present
+      const cleanExpr = inputExpr.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+      resolvedInput = resolveExpr(cleanExpr, exprCtx);
+    } else {
+      resolvedInput = undefined;
+    }
+
+    const transformResult = applyTransformPipeline(
+      resolvedInput,
+      transformData.config.operations,
+      exprCtx,
+    );
+
+    const timing = buildTiming(nodeId, startedAt);
+
+    if (!transformResult.success) {
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, transformResult.error ?? "Transform failed", false, 0));
+      return {
+        status: "failed",
+        output: { success: false, error: transformResult.error, operationsApplied: transformResult.operationsApplied },
+        timing,
+        nextNodes: [],
+        error: transformResult.error,
+      };
+    }
+
+    const output = {
+      success: true,
+      output: transformResult.output,
+      operationsApplied: transformResult.operationsApplied,
+    };
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, output as unknown as Record<string, unknown>, timing.durationMs)
+    );
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    return {
+      status: "completed",
+      output,
+      timing,
+      nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+    };
+  }
+
+  // ── Sub-Workflow: resolve and execute child workflow ──
+  if (data.nodeType === "sub_workflow") {
+    const subData = data as SubWorkflowNodeData;
+    const subConfig = subData.config;
+    emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "sub_workflow", { workflowId: subConfig.workflowId, version: subConfig.version }));
+
+    // Ensure a workflow resolver is configured
+    if (!config.workflowResolver) {
+      const errorMsg = "Sub-workflow execution requires a workflowResolver in EngineConfig";
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    // Cycle detection via call stack
+    const callStack = actionCtx._callStack ?? [];
+    const maxDepth = subConfig.maxDepth ?? 10;
+
+    if (callStack.includes(subConfig.workflowId)) {
+      const errorMsg = `Circular sub-workflow detected: "${subConfig.workflowId}" is already in the call stack [${callStack.join(" -> ")}]`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    if (callStack.length >= maxDepth) {
+      const errorMsg = `Sub-workflow max depth (${maxDepth}) exceeded. Call stack: [${callStack.join(" -> ")}]`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    // Resolve the child workflow
+    let childWorkflow;
+    try {
+      childWorkflow = await config.workflowResolver.resolve(subConfig.workflowId, subConfig.version);
+    } catch (resolveErr) {
+      const errorMsg = `Failed to resolve sub-workflow "${subConfig.workflowId}": ${resolveErr instanceof Error ? resolveErr.message : String(resolveErr)}`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    if (!childWorkflow) {
+      const errorMsg = `Sub-workflow "${subConfig.workflowId}"${subConfig.version ? ` (version ${subConfig.version})` : ""} not found`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    // Validate: no delay nodes in child workflow
+    const validation = validateSubWorkflow(childWorkflow, actionCtx.workflowId);
+    if (!validation.valid) {
+      const errorMsg = `Sub-workflow validation failed: ${validation.errors.join("; ")}`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    // Build expression context for resolving input mappings
+    const parentExprCtx = buildExpressionContext(nodeOutputs, actionCtx);
+
+    // Resolve input mappings: parent expressions -> child context vars
+    const childVars: Record<string, string | number | undefined> = {};
+    for (const [childVarName, parentExpression] of Object.entries(subConfig.inputMappings)) {
+      const cleanExpr = parentExpression.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+      const resolved = resolveExpr(cleanExpr, parentExprCtx);
+      if (resolved === undefined || resolved === null) {
+        childVars[childVarName] = undefined;
+      } else if (typeof resolved === "string" || typeof resolved === "number") {
+        childVars[childVarName] = resolved;
+      } else {
+        // For objects/arrays, JSON-stringify into the var
+        try {
+          childVars[childVarName] = JSON.stringify(resolved);
+        } catch {
+          childVars[childVarName] = String(resolved);
+        }
+      }
+    }
+
+    // Build child action context with updated call stack
+    const childCallStack = [...callStack, actionCtx.workflowId];
+    const childActionCtx: ActionContext = {
+      workflowId: childWorkflow.id,
+      runId,
+      vars: childVars,
+      _callStack: childCallStack,
+    };
+
+    // Build child graph structures
+    const childNodes = childWorkflow.nodes ?? [];
+    const childEdges = childWorkflow.edges ?? [];
+    const childOutEdges = new Map<string, FlowEdge[]>();
+    for (const edge of childEdges) {
+      const existing = childOutEdges.get(edge.source) ?? [];
+      existing.push(edge);
+      childOutEdges.set(edge.source, existing);
+    }
+    const childNodeMap = new Map<string, FlowNode>();
+    for (const n of childNodes) childNodeMap.set(n.id, n);
+
+    // Find trigger node in child (entry point)
+    const childTrigger = childNodes.find((n) => n.type === "trigger");
+    if (!childTrigger) {
+      const errorMsg = `Sub-workflow "${subConfig.workflowId}" has no trigger node`;
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, errorMsg, false, 0));
+      return { status: "failed", output: { success: false, error: errorMsg }, timing, nextNodes: [], error: errorMsg };
+    }
+
+    // Run the child workflow BFS inline (no new run record)
+    const childNodeOutputs: Record<string, unknown> = {};
+    const childNodeTimings: Record<string, NodeTiming> = {};
+    const childVisited = new Set<string>();
+    const childQueue = [childTrigger.id];
+
+    const childNctx: NodeExecContext = {
+      runId,
+      actionCtx: childActionCtx,
+      config,
+      nodeOutputs: childNodeOutputs,
+      nodeTimings: childNodeTimings,
+      outEdges: childOutEdges,
+      nodeMap: childNodeMap,
+      visited: childVisited,
+    };
+
+    let childError: string | undefined;
+    try {
+      while (childQueue.length > 0) {
+        const childNodeId = childQueue.shift()!;
+        if (childVisited.has(childNodeId)) continue;
+        childVisited.add(childNodeId);
+
+        const childNode = childNodeMap.get(childNodeId);
+        if (!childNode) continue;
+
+        const childResult = await executeNode(childNode, childNctx);
+        childNodeOutputs[childNodeId] = childResult.output;
+        childNodeTimings[childNodeId] = childResult.timing;
+
+        if (childResult.status === "paused") {
+          // Delay nodes are validated away, but handle gracefully
+          childError = "Sub-workflow attempted to pause (delay nodes are not allowed in sub-workflows)";
+          break;
+        }
+
+        if (childResult.status === "failed") {
+          childError = childResult.error ?? `Node ${childNodeId} failed in sub-workflow`;
+          break;
+        }
+
+        for (const next of childResult.nextNodes) {
+          childQueue.push(next.nodeId);
+        }
+      }
+    } catch (err) {
+      childError = err instanceof Error ? err.message : String(err);
+    }
+
+    if (childError) {
+      const timing = buildTiming(nodeId, startedAt);
+      emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, childError!, false, 0));
+      return { status: "failed", output: { success: false, error: childError, childOutputs: childNodeOutputs }, timing, nextNodes: [], error: childError };
+    }
+
+    // Resolve output mappings: child outputs -> parent context
+    const childExprCtx = buildExpressionContext(childNodeOutputs, childActionCtx);
+    const mappedOutput: Record<string, unknown> = {};
+    for (const [parentVarName, childExpression] of Object.entries(subConfig.outputMappings)) {
+      const cleanExpr = childExpression.replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+      mappedOutput[parentVarName] = resolveExpr(cleanExpr, childExprCtx);
+    }
+
+    const output = { success: true, output: mappedOutput, childOutputs: childNodeOutputs };
+    const timing = buildTiming(nodeId, startedAt);
+    emitLog(config.logger, (l) =>
+      l.onNodeComplete?.(runId, nodeId, output as unknown as Record<string, unknown>, timing.durationMs)
+    );
+
+    // Store mapped outputs in parent nodeOutputs so downstream can reference them
+    nodeOutputs[nodeId] = output;
+
+    const nextEdges = outEdges.get(nodeId) ?? [];
+    return {
+      status: "completed",
+      output,
+      timing,
+      nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+    };
+  }
+
+  // ── Unknown type: pass through ──
+  emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, (data as { nodeType: string }).nodeType, {}));
+  const output = { type: (data as { nodeType: string }).nodeType, passthrough: true };
+  const timing = buildTiming(nodeId, startedAt);
+  emitLog(config.logger, (l) =>
+    l.onNodeComplete?.(runId, nodeId, output as Record<string, unknown>, timing.durationMs)
+  );
+  const nextEdges = outEdges.get(nodeId) ?? [];
+  return {
+    status: "completed",
+    output,
+    timing,
+    nextNodes: nextEdges.map((e) => ({ nodeId: e.target })),
+  };
+}
+
+/**
+ * Build a NodeTiming from a start time to now.
+ */
+function buildTiming(nodeId: string, startedAt: Date): NodeTiming {
+  const completedAt = new Date();
+  return {
+    nodeId,
+    startedAt: startedAt.toISOString(),
+    completedAt: completedAt.toISOString(),
+    durationMs: completedAt.getTime() - startedAt.getTime(),
+  };
+}
+
+// ── BFS runner shared by executeWorkflow and resumeWorkflow ──────
+
+/**
+ * Parameters for the shared BFS loop.
+ */
+interface BfsParams {
+  runId: string;
+  workflowId: string;
+  queue: string[];
+  visited: Set<string>;
+  nodeOutputs: Record<string, unknown>;
+  nodeTimings: Record<string, NodeTiming>;
+  outEdges: Map<string, FlowEdge[]>;
+  nodeMap: Map<string, FlowNode>;
+  actionCtx: ActionContext;
+  config: EngineConfig;
+  event: WorkflowEvent;
+  workflowStartTime: number;
+}
+
+/**
+ * Shared BFS loop. Returns a RunResult. Both executeWorkflow and resumeWorkflow
+ * set up the initial state and then call this.
+ */
+async function runBfsLoop(params: BfsParams): Promise<RunResult> {
+  const {
+    runId, workflowId, queue, visited, nodeOutputs, nodeTimings,
+    outEdges, nodeMap, actionCtx, config, event, workflowStartTime,
+  } = params;
+
+  const nctx: NodeExecContext = {
+    runId, actionCtx, config, nodeOutputs, nodeTimings, outEdges, nodeMap, visited,
+  };
+
+  try {
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!;
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+
+      const node = nodeMap.get(nodeId);
+      if (!node) continue;
+
+      await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, nodeId);
+
+      const result = await executeNode(node, nctx);
+
+      // Store output and timing
+      nodeOutputs[nodeId] = result.output;
+      nodeTimings[nodeId] = result.timing;
+
+      // Handle pause (delay node)
+      if (result.status === "paused" && result.pauseConfig) {
+        const { resumeAt, nextNodeIds } = result.pauseConfig;
+        await config.persistence.updateRun(
+          runId,
+          "paused",
+          { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
+          undefined,
+          nodeId
+        );
+        if (config.persistence.scheduleResume) {
+          await config.persistence.scheduleResume(runId, workflowId, resumeAt, event);
+        }
+        emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "paused", Date.now() - workflowStartTime));
+        return { runId, status: "paused", nodeOutputs, nodeTimings };
+      }
+
+      // Handle try_catch inner pause (delay within try branch)
+      if (result.status === "paused" && result.tryCatchPause) {
+        const { resumeAt, nextNodeIds, delayNodeId } = result.tryCatchPause;
+        await config.persistence.updateRun(
+          runId,
+          "paused",
+          { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
+          undefined,
+          delayNodeId
+        );
+        if (config.persistence.scheduleResume) {
+          await config.persistence.scheduleResume(runId, workflowId, resumeAt, event);
+        }
+        emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "paused", Date.now() - workflowStartTime));
+        return { runId, status: "paused", nodeOutputs, nodeTimings };
+      }
+
+      // Handle failure — don't enqueue downstream
+      if (result.status === "failed") {
+        continue;
+      }
+
+      // Enqueue downstream nodes
+      for (const next of result.nextNodes) {
+        queue.push(next.nodeId);
+      }
+    }
+
+    await config.persistence.updateRun(runId, "completed", nodeOutputs);
+    if (config.persistence.onWorkflowComplete) {
+      await config.persistence.onWorkflowComplete(workflowId);
+    }
+
+    emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "completed", Date.now() - workflowStartTime));
+    return { runId, status: "completed", nodeOutputs, nodeTimings };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    await config.persistence.updateRun(runId, "failed", nodeOutputs, errorMsg);
+    emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "failed", Date.now() - workflowStartTime));
+    return { runId, status: "failed", nodeOutputs, nodeTimings, error: errorMsg };
+  }
+}
+
+// ── Public API ───────────────────────────────────────────────────
 
 /**
  * Execute a workflow from its data.
@@ -120,361 +926,20 @@ export async function executeWorkflow(
     return { runId, status: "failed", nodeOutputs, nodeTimings, error: "No trigger node found" };
   }
 
-  const queue: string[] = [triggerNode.id];
-  const visited = new Set<string>();
-
-  try {
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!;
-      if (visited.has(nodeId)) continue;
-      visited.add(nodeId);
-
-      const node = nodeMap.get(nodeId);
-      if (!node) continue;
-
-      await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, nodeId);
-
-      const startedAt = new Date();
-      const data = node.data;
-
-      // ── Trigger: pass through ──
-      if (data.nodeType === "trigger") {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "trigger", {}));
-        nodeOutputs[nodeId] = { type: "trigger", triggered: true };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) queue.push(e.target);
-        continue;
-      }
-
-      // ── Action: execute via plugin ──
-      if (data.nodeType === "action") {
-        const actionData = data as ActionNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "action", actionData.config));
-        const result = await executeActionWithRetry(
-          actionData.actionType,
-          actionData.config,
-          actionCtx,
-          config,
-          actionData.retryConfig,
-          nodeId
-        );
-        nodeOutputs[nodeId] = result;
-        recordTiming(nodeTimings, nodeId, startedAt);
-
-        if (!result.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, result.error ?? "Unknown error", false, 0));
-          // Don't propagate to downstream nodes on failure (use try-catch for error handling)
-          continue;
-        }
-
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, result.output ?? {}, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) queue.push(e.target);
-        continue;
-      }
-
-      // ── Condition: evaluate and branch ──
-      if (data.nodeType === "condition") {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "condition", (data as ConditionNodeData).config as unknown as Record<string, unknown>));
-        const condResult = evaluateCondition(data as ConditionNodeData, actionCtx);
-        nodeOutputs[nodeId] = { condition: condResult };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, { condition: condResult }, nodeTimings[nodeId].durationMs)
-        );
-
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        const targetHandle = condResult ? "true" : "false";
-        const skippedHandle = condResult ? "false" : "true";
-        for (const e of nextEdges) {
-          if (e.sourceHandle === targetHandle) {
-            queue.push(e.target);
-          } else if (e.sourceHandle === skippedHandle) {
-            emitLog(config.logger, (l) =>
-              l.onNodeSkipped?.(runId, e.target, `Condition "${nodeId}" evaluated to ${condResult}`)
-            );
-          }
-        }
-        continue;
-      }
-
-      // ── Delay: pause the run ──
-      if (data.nodeType === "delay") {
-        const delayData = data as DelayNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "delay", delayData.config as unknown as Record<string, unknown>));
-        const cfg = delayData.config;
-        const delayMs = computeDelayMs(cfg.duration, cfg.unit);
-
-        const resumeAt = new Date(Date.now() + delayMs).toISOString();
-        nodeOutputs[nodeId] = { delay: true, resumeAt, unit: cfg.unit, duration: cfg.duration };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        const nextNodeIds = nextEdges.map((e) => e.target);
-
-        await config.persistence.updateRun(
-          runId,
-          "paused",
-          { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
-          undefined,
-          nodeId
-        );
-
-        if (config.persistence.scheduleResume) {
-          await config.persistence.scheduleResume(runId, workflow.id, resumeAt, event);
-        }
-
-        emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "paused", Date.now() - workflowStartTime));
-        return { runId, status: "paused", nodeOutputs, nodeTimings };
-      }
-
-      // ── Try-Catch: execute try branch, route to catch on failure ──
-      if (data.nodeType === "try_catch") {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "try_catch", {}));
-        const allEdges = outEdges.get(nodeId) ?? [];
-
-        // Collect try-path and catch-path targets based on sourceHandle
-        const tryTargets = allEdges
-          .filter((e) => e.sourceHandle === "success")
-          .map((e) => e.target);
-        const catchTargets = allEdges
-          .filter((e) => e.sourceHandle === "error")
-          .map((e) => e.target);
-
-        let tryCatchError: string | undefined;
-
-        // Execute try-branch nodes in BFS order
-        const tryQueue = [...tryTargets];
-        const tryVisited = new Set<string>();
-        let tryFailed = false;
-
-        try {
-          while (tryQueue.length > 0) {
-            const tryNodeId = tryQueue.shift()!;
-            if (tryVisited.has(tryNodeId) || visited.has(tryNodeId)) continue;
-            tryVisited.add(tryNodeId);
-            visited.add(tryNodeId);
-
-            const tryNode = nodeMap.get(tryNodeId);
-            if (!tryNode) continue;
-
-            const tryStartedAt = new Date();
-            await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, tryNodeId);
-
-            if (tryNode.data.nodeType === "action") {
-              const actionData = tryNode.data as ActionNodeData;
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, "action", actionData.config));
-              const result = await executeActionWithRetry(
-                actionData.actionType,
-                actionData.config,
-                actionCtx,
-                config,
-                actionData.retryConfig,
-                tryNodeId
-              );
-              nodeOutputs[tryNodeId] = result;
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-
-              if (!result.success) {
-                emitLog(config.logger, (l) => l.onNodeError?.(runId, tryNodeId, result.error ?? "Unknown error", false, 0));
-                tryCatchError = result.error ?? `Action node ${tryNodeId} failed`;
-                tryFailed = true;
-                break;
-              }
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, result.output ?? {}, nodeTimings[tryNodeId].durationMs)
-              );
-            } else if (tryNode.data.nodeType === "condition") {
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, "condition", (tryNode.data as ConditionNodeData).config as unknown as Record<string, unknown>));
-              const condResult = evaluateCondition(tryNode.data as ConditionNodeData, actionCtx);
-              nodeOutputs[tryNodeId] = { condition: condResult };
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, { condition: condResult }, nodeTimings[tryNodeId].durationMs)
-              );
-
-              const nextEdges = outEdges.get(tryNodeId) ?? [];
-              const targetHandle = condResult ? "true" : "false";
-              for (const e of nextEdges) {
-                if (e.sourceHandle === targetHandle) tryQueue.push(e.target);
-              }
-              continue;
-            } else if (tryNode.data.nodeType === "delay") {
-              const delayData = tryNode.data as DelayNodeData;
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, "delay", delayData.config as unknown as Record<string, unknown>));
-              const cfg = delayData.config;
-              const delayMs = computeDelayMs(cfg.duration, cfg.unit);
-              const resumeAt = new Date(Date.now() + delayMs).toISOString();
-              nodeOutputs[tryNodeId] = { delay: true, resumeAt, unit: cfg.unit, duration: cfg.duration };
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, nodeOutputs[tryNodeId] as Record<string, unknown>, nodeTimings[tryNodeId].durationMs)
-              );
-              // Delay within try-catch pauses the entire run
-              const nextEdges = outEdges.get(tryNodeId) ?? [];
-              const nextNodeIds = nextEdges.map((e) => e.target);
-              await config.persistence.updateRun(
-                runId, "paused",
-                { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
-                undefined, tryNodeId
-              );
-              if (config.persistence.scheduleResume) {
-                await config.persistence.scheduleResume(runId, workflow.id, resumeAt, event);
-              }
-              // Record timing for the parent try_catch node before returning
-              recordTiming(nodeTimings, nodeId, startedAt);
-              emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "paused", Date.now() - workflowStartTime));
-              return { runId, status: "paused", nodeOutputs, nodeTimings };
-            } else {
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, tryNode.data.nodeType, {}));
-              nodeOutputs[tryNodeId] = { type: tryNode.data.nodeType, passthrough: true };
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, nodeOutputs[tryNodeId] as Record<string, unknown>, nodeTimings[tryNodeId].durationMs)
-              );
-            }
-
-            // Enqueue downstream edges of the try node (within try branch)
-            if (!tryFailed) {
-              const nextEdges = outEdges.get(tryNodeId) ?? [];
-              for (const e of nextEdges) tryQueue.push(e.target);
-            }
-          }
-        } catch (err) {
-          tryFailed = true;
-          tryCatchError = err instanceof Error ? err.message : String(err);
-        }
-
-        nodeOutputs[nodeId] = {
-          type: "try_catch",
-          trySucceeded: !tryFailed,
-          error: tryCatchError,
-        };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-
-        if (tryFailed) {
-          // Inject error into context for catch-branch nodes
-          actionCtx.vars._tryCatchError = tryCatchError ?? "Unknown error";
-          for (const catchTarget of catchTargets) {
-            queue.push(catchTarget);
-          }
-        }
-        // If try succeeded, no further routing — downstream from try nodes already queued
-        continue;
-      }
-
-      // ── Code: execute user code in a sandbox ──
-      if (data.nodeType === "code") {
-        const codeData = data as CodeNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "code", { language: codeData.config.language }));
-        const codeResult = await executeCodeNode(codeData, nodeOutputs, actionCtx);
-        nodeOutputs[nodeId] = codeResult;
-        recordTiming(nodeTimings, nodeId, startedAt);
-
-        if (!codeResult.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, codeResult.error ?? "Code execution failed", false, 0));
-          continue;
-        }
-
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, codeResult.output ?? {}, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) queue.push(e.target);
-        continue;
-      }
-
-      // ── Switch: evaluate expression and route to matching case ──
-      if (data.nodeType === "switch") {
-        const switchData = data as SwitchNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "switch", { expression: switchData.config.expression }));
-        const switchResult = executeSwitchNode(switchData, nodeOutputs, actionCtx, config);
-        nodeOutputs[nodeId] = switchResult;
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, switchResult as unknown as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-
-        const matchedHandle = switchResult.matchedCase;
-        if (matchedHandle) {
-          const nextEdges = outEdges.get(nodeId) ?? [];
-          for (const e of nextEdges) {
-            if (e.sourceHandle === matchedHandle) {
-              queue.push(e.target);
-            } else {
-              emitLog(config.logger, (l) =>
-                l.onNodeSkipped?.(runId, e.target, `Switch "${nodeId}" routed to "${matchedHandle}"`)
-              );
-            }
-          }
-        }
-        continue;
-      }
-
-      // ── Loop: iterate over array and execute body branch ──
-      if (data.nodeType === "loop") {
-        const loopData = data as LoopNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "loop", { arrayExpression: loopData.config.arrayExpression }));
-        const loopResult = await executeLoopNode(
-          loopData, nodeOutputs, actionCtx, config, outEdges, nodeMap, nodeId, visited, nodeTimings, runId, startedAt
-        );
-        nodeOutputs[nodeId] = loopResult;
-        recordTiming(nodeTimings, nodeId, startedAt);
-
-        if (!loopResult.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, loopResult.error ?? "Loop execution failed", false, 0));
-          continue;
-        }
-
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, loopResult.output ?? {}, nodeTimings[nodeId].durationMs)
-        );
-        // Queue "complete" handle edges
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) {
-          if (e.sourceHandle === "complete") {
-            queue.push(e.target);
-          }
-        }
-        continue;
-      }
-
-      // Unknown type — skip and continue
-      emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, (data as { nodeType: string }).nodeType, {}));
-      nodeOutputs[nodeId] = { type: (data as { nodeType: string }).nodeType, passthrough: true };
-      recordTiming(nodeTimings, nodeId, startedAt);
-      emitLog(config.logger, (l) =>
-        l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-      );
-      const nextEdges = outEdges.get(nodeId) ?? [];
-      for (const e of nextEdges) queue.push(e.target);
-    }
-
-    await config.persistence.updateRun(runId, "completed", nodeOutputs);
-    if (config.persistence.onWorkflowComplete) {
-      await config.persistence.onWorkflowComplete(workflow.id);
-    }
-
-    emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "completed", Date.now() - workflowStartTime));
-    return { runId, status: "completed", nodeOutputs, nodeTimings };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    await config.persistence.updateRun(runId, "failed", nodeOutputs, errorMsg);
-    emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "failed", Date.now() - workflowStartTime));
-    return { runId, status: "failed", nodeOutputs, nodeTimings, error: errorMsg };
-  }
+  return runBfsLoop({
+    runId,
+    workflowId: workflow.id,
+    queue: [triggerNode.id],
+    visited: new Set<string>(),
+    nodeOutputs,
+    nodeTimings,
+    outEdges,
+    nodeMap,
+    actionCtx,
+    config,
+    event,
+    workflowStartTime,
+  });
 }
 
 /**
@@ -518,316 +983,20 @@ export async function resumeWorkflow(
 
   await config.persistence.updateRun(runId, "running", nodeOutputs);
 
-  const queue = [...resumeTargets];
-  const visited = new Set<string>(Object.keys(nodeOutputs));
-
-  try {
-    while (queue.length > 0) {
-      const nodeId = queue.shift()!;
-      if (visited.has(nodeId)) continue;
-      visited.add(nodeId);
-
-      const node = nodeMap.get(nodeId);
-      if (!node) continue;
-
-      await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, nodeId);
-      const startedAt = new Date();
-      const data = node.data;
-
-      if (data.nodeType === "action") {
-        const actionData = data as ActionNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "action", actionData.config));
-        const result = await executeActionWithRetry(
-          actionData.actionType,
-          actionData.config,
-          actionCtx,
-          config,
-          actionData.retryConfig,
-          nodeId
-        );
-        nodeOutputs[nodeId] = result;
-        recordTiming(nodeTimings, nodeId, startedAt);
-        if (!result.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, result.error ?? "Unknown error", false, 0));
-          // Don't propagate to downstream nodes on failure (use try-catch for error handling)
-          continue;
-        }
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, result.output ?? {}, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) queue.push(e.target);
-        continue;
-      }
-
-      if (data.nodeType === "condition") {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "condition", (data as ConditionNodeData).config as unknown as Record<string, unknown>));
-        const condResult = evaluateCondition(data as ConditionNodeData, actionCtx);
-        nodeOutputs[nodeId] = { condition: condResult };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, { condition: condResult }, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        const targetHandle = condResult ? "true" : "false";
-        const skippedHandle = condResult ? "false" : "true";
-        for (const e of nextEdges) {
-          if (e.sourceHandle === targetHandle) {
-            queue.push(e.target);
-          } else if (e.sourceHandle === skippedHandle) {
-            emitLog(config.logger, (l) =>
-              l.onNodeSkipped?.(runId, e.target, `Condition "${nodeId}" evaluated to ${condResult}`)
-            );
-          }
-        }
-        continue;
-      }
-
-      if (data.nodeType === "delay") {
-        const delayData = data as DelayNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "delay", delayData.config as unknown as Record<string, unknown>));
-        const cfg = delayData.config;
-        const delayMs = computeDelayMs(cfg.duration, cfg.unit);
-
-        const resumeAt = new Date(Date.now() + delayMs).toISOString();
-        nodeOutputs[nodeId] = { delay: true, resumeAt };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        const nextNodeIds = nextEdges.map((e) => e.target);
-
-        await config.persistence.updateRun(
-          runId,
-          "paused",
-          { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
-          undefined,
-          nodeId
-        );
-
-        if (config.persistence.scheduleResume) {
-          await config.persistence.scheduleResume(runId, workflow.id, resumeAt, event);
-        }
-
-        emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "paused", Date.now() - resumeStartTime));
-        return { runId, status: "paused", nodeOutputs, nodeTimings };
-      }
-
-      // ── Try-Catch in resume: same logic as executeWorkflow ──
-      if (data.nodeType === "try_catch") {
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "try_catch", {}));
-        const allEdges = outEdges.get(nodeId) ?? [];
-        const tryTargets = allEdges.filter((e) => e.sourceHandle === "success").map((e) => e.target);
-        const catchTargets = allEdges.filter((e) => e.sourceHandle === "error").map((e) => e.target);
-
-        let tryCatchError: string | undefined;
-        const tryQueue = [...tryTargets];
-        const tryVisited = new Set<string>();
-        let tryFailed = false;
-
-        try {
-          while (tryQueue.length > 0) {
-            const tryNodeId = tryQueue.shift()!;
-            if (tryVisited.has(tryNodeId) || visited.has(tryNodeId)) continue;
-            tryVisited.add(tryNodeId);
-            visited.add(tryNodeId);
-
-            const tryNode = nodeMap.get(tryNodeId);
-            if (!tryNode) continue;
-
-            const tryStartedAt = new Date();
-            await config.persistence.updateRun(runId, "running", nodeOutputs, undefined, tryNodeId);
-
-            if (tryNode.data.nodeType === "action") {
-              const actionData = tryNode.data as ActionNodeData;
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, "action", actionData.config));
-              const result = await executeActionWithRetry(
-                actionData.actionType, actionData.config, actionCtx, config, actionData.retryConfig, tryNodeId
-              );
-              nodeOutputs[tryNodeId] = result;
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              if (!result.success) {
-                emitLog(config.logger, (l) => l.onNodeError?.(runId, tryNodeId, result.error ?? "Unknown error", false, 0));
-                tryCatchError = result.error ?? `Action node ${tryNodeId} failed`;
-                tryFailed = true;
-                break;
-              }
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, result.output ?? {}, nodeTimings[tryNodeId].durationMs)
-              );
-            } else if (tryNode.data.nodeType === "condition") {
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, "condition", (tryNode.data as ConditionNodeData).config as unknown as Record<string, unknown>));
-              const condResult = evaluateCondition(tryNode.data as ConditionNodeData, actionCtx);
-              nodeOutputs[tryNodeId] = { condition: condResult };
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, { condition: condResult }, nodeTimings[tryNodeId].durationMs)
-              );
-
-              const nextEdges = outEdges.get(tryNodeId) ?? [];
-              const targetHandle = condResult ? "true" : "false";
-              for (const e of nextEdges) {
-                if (e.sourceHandle === targetHandle) tryQueue.push(e.target);
-              }
-              continue;
-            } else if (tryNode.data.nodeType === "delay") {
-              const delayData = tryNode.data as DelayNodeData;
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, "delay", delayData.config as unknown as Record<string, unknown>));
-              const cfg = delayData.config;
-              const delayMs = computeDelayMs(cfg.duration, cfg.unit);
-              const resumeAt = new Date(Date.now() + delayMs).toISOString();
-              nodeOutputs[tryNodeId] = { delay: true, resumeAt, unit: cfg.unit, duration: cfg.duration };
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, nodeOutputs[tryNodeId] as Record<string, unknown>, nodeTimings[tryNodeId].durationMs)
-              );
-              // Delay within try-catch pauses the entire run
-              const nextEdges = outEdges.get(tryNodeId) ?? [];
-              const nextNodeIds = nextEdges.map((e) => e.target);
-              await config.persistence.updateRun(
-                runId, "paused",
-                { ...nodeOutputs, _resume_targets: nextNodeIds, _resume_at: resumeAt },
-                undefined, tryNodeId
-              );
-              if (config.persistence.scheduleResume) {
-                await config.persistence.scheduleResume(runId, workflow.id, resumeAt, event);
-              }
-              // Record timing for the parent try_catch node before returning
-              recordTiming(nodeTimings, nodeId, startedAt);
-              emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "paused", Date.now() - resumeStartTime));
-              return { runId, status: "paused", nodeOutputs, nodeTimings };
-            } else {
-              emitLog(config.logger, (l) => l.onNodeStart?.(runId, tryNodeId, tryNode.data.nodeType, {}));
-              nodeOutputs[tryNodeId] = { type: tryNode.data.nodeType, passthrough: true };
-              recordTiming(nodeTimings, tryNodeId, tryStartedAt);
-              emitLog(config.logger, (l) =>
-                l.onNodeComplete?.(runId, tryNodeId, nodeOutputs[tryNodeId] as Record<string, unknown>, nodeTimings[tryNodeId].durationMs)
-              );
-            }
-
-            if (!tryFailed) {
-              const nextEdges = outEdges.get(tryNodeId) ?? [];
-              for (const e of nextEdges) tryQueue.push(e.target);
-            }
-          }
-        } catch (err) {
-          tryFailed = true;
-          tryCatchError = err instanceof Error ? err.message : String(err);
-        }
-
-        nodeOutputs[nodeId] = { type: "try_catch", trySucceeded: !tryFailed, error: tryCatchError };
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-
-        if (tryFailed) {
-          actionCtx.vars._tryCatchError = tryCatchError ?? "Unknown error";
-          for (const catchTarget of catchTargets) queue.push(catchTarget);
-        }
-        continue;
-      }
-
-      // ── Code: execute user code in a sandbox ──
-      if (data.nodeType === "code") {
-        const codeData = data as CodeNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "code", { language: codeData.config.language }));
-        const codeResult = await executeCodeNode(codeData, nodeOutputs, actionCtx);
-        nodeOutputs[nodeId] = codeResult;
-        recordTiming(nodeTimings, nodeId, startedAt);
-
-        if (!codeResult.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, codeResult.error ?? "Code execution failed", false, 0));
-          continue;
-        }
-
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, codeResult.output ?? {}, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) queue.push(e.target);
-        continue;
-      }
-
-      // ── Switch: evaluate expression and route to matching case ──
-      if (data.nodeType === "switch") {
-        const switchData = data as SwitchNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "switch", { expression: switchData.config.expression }));
-        const switchResult = executeSwitchNode(switchData, nodeOutputs, actionCtx, config);
-        nodeOutputs[nodeId] = switchResult;
-        recordTiming(nodeTimings, nodeId, startedAt);
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, switchResult as unknown as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-        );
-
-        const matchedHandle = switchResult.matchedCase;
-        if (matchedHandle) {
-          const nextEdges = outEdges.get(nodeId) ?? [];
-          for (const e of nextEdges) {
-            if (e.sourceHandle === matchedHandle) {
-              queue.push(e.target);
-            } else {
-              emitLog(config.logger, (l) =>
-                l.onNodeSkipped?.(runId, e.target, `Switch "${nodeId}" routed to "${matchedHandle}"`)
-              );
-            }
-          }
-        }
-        continue;
-      }
-
-      // ── Loop: iterate over array and execute body branch ──
-      if (data.nodeType === "loop") {
-        const loopData = data as LoopNodeData;
-        emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, "loop", { arrayExpression: loopData.config.arrayExpression }));
-        const loopResult = await executeLoopNode(
-          loopData, nodeOutputs, actionCtx, config, outEdges, nodeMap, nodeId, visited, nodeTimings, runId, startedAt
-        );
-        nodeOutputs[nodeId] = loopResult;
-        recordTiming(nodeTimings, nodeId, startedAt);
-
-        if (!loopResult.success) {
-          emitLog(config.logger, (l) => l.onNodeError?.(runId, nodeId, loopResult.error ?? "Loop execution failed", false, 0));
-          continue;
-        }
-
-        emitLog(config.logger, (l) =>
-          l.onNodeComplete?.(runId, nodeId, loopResult.output ?? {}, nodeTimings[nodeId].durationMs)
-        );
-        const nextEdges = outEdges.get(nodeId) ?? [];
-        for (const e of nextEdges) {
-          if (e.sourceHandle === "complete") {
-            queue.push(e.target);
-          }
-        }
-        continue;
-      }
-
-      emitLog(config.logger, (l) => l.onNodeStart?.(runId, nodeId, (data as { nodeType: string }).nodeType, {}));
-      nodeOutputs[nodeId] = { type: (data as { nodeType: string }).nodeType, passthrough: true };
-      recordTiming(nodeTimings, nodeId, startedAt);
-      emitLog(config.logger, (l) =>
-        l.onNodeComplete?.(runId, nodeId, nodeOutputs[nodeId] as Record<string, unknown>, nodeTimings[nodeId].durationMs)
-      );
-      const nextEdges = outEdges.get(nodeId) ?? [];
-      for (const e of nextEdges) queue.push(e.target);
-    }
-
-    await config.persistence.updateRun(runId, "completed", nodeOutputs);
-    if (config.persistence.onWorkflowComplete) {
-      await config.persistence.onWorkflowComplete(workflow.id);
-    }
-
-    emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "completed", Date.now() - resumeStartTime));
-    return { runId, status: "completed", nodeOutputs, nodeTimings };
-  } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    await config.persistence.updateRun(runId, "failed", nodeOutputs, errorMsg);
-    emitLog(config.logger, (l) => l.onWorkflowComplete?.(runId, "failed", Date.now() - resumeStartTime));
-    return { runId, status: "failed", nodeOutputs, nodeTimings, error: errorMsg };
-  }
+  return runBfsLoop({
+    runId,
+    workflowId: workflow.id,
+    queue: [...resumeTargets],
+    visited: new Set<string>(Object.keys(nodeOutputs)),
+    nodeOutputs,
+    nodeTimings,
+    outEdges,
+    nodeMap,
+    actionCtx,
+    config,
+    event,
+    workflowStartTime: resumeStartTime,
+  });
 }
 
 // ── Internal helpers ────────────────────────────────────────────
@@ -1025,7 +1194,8 @@ async function executeActionWithRetry(
   ctx: ActionContext,
   engineConfig: EngineConfig,
   nodeRetryConfig?: RetryConfig,
-  nodeId?: string
+  nodeId?: string,
+  nodeOutputs?: Record<string, unknown>
 ): Promise<ActionResult> {
   const retryConfig = resolveRetryConfig(
     engineConfig.maxRetries ?? 2,
@@ -1043,6 +1213,12 @@ async function executeActionWithRetry(
       const errorMsg = err instanceof Error ? err.message : String(err);
       return { success: false, error: errorMsg };
     }
+  }
+
+  // Resolve template expressions in config values (e.g. {{nodeId.output.field}}, {{vars.name}})
+  if (nodeOutputs) {
+    const exprCtx = buildExpressionContext(nodeOutputs, ctx);
+    resolvedConfig = resolveAllValues(resolvedConfig, exprCtx);
   }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -1095,27 +1271,38 @@ async function executeActionWithRetry(
  */
 export function evaluateCondition(
   data: ConditionNodeData,
-  ctx: ActionContext
+  ctx: ActionContext,
+  nodeOutputs?: Record<string, unknown>
 ): boolean {
   const config = data.config;
 
   if (config.conditions && config.conditions.length > 0) {
     const results = config.conditions.map((c) =>
-      evalSingleCondition(c.field, c.operator, c.value, ctx)
+      evalSingleCondition(c.field, c.operator, c.value, ctx, nodeOutputs)
     );
     return config.logic === "or" ? results.some(Boolean) : results.every(Boolean);
   }
 
-  return evalSingleCondition(config.field, config.operator, config.value, ctx);
+  return evalSingleCondition(config.field, config.operator, config.value, ctx, nodeOutputs);
 }
 
 function evalSingleCondition(
   field: string,
   operator: string,
   value: string,
-  ctx: ActionContext
+  ctx: ActionContext,
+  nodeOutputs?: Record<string, unknown>
 ): boolean {
-  const actual = String(ctx.vars[field] ?? "");
+  // Use expression resolver to resolve the field reference, supporting
+  // {{nodeId.field}}, {{vars.name}}, and backward-compatible plain var names
+  let actual: string;
+  if (nodeOutputs) {
+    const exprCtx = buildExpressionContext(nodeOutputs, ctx);
+    const resolved = resolveExpr(field, exprCtx);
+    actual = resolved !== undefined ? String(resolved) : "";
+  } else {
+    actual = String(ctx.vars[field] ?? "");
+  }
   const expected = value;
 
   switch (operator) {
@@ -1228,39 +1415,18 @@ async function executeCodeNode(
 
 /**
  * Resolve a template expression against upstream outputs and context vars.
- * Supports {{nodeId.field}} notation for accessing nested outputs,
- * and simple {{varName}} for context vars.
+ * Delegates to the expression-resolver module for full support of
+ * {{nodeId.output.field}}, {{vars.name}}, {{env.KEY}}, {{credential:id.field}},
+ * array indexing, deep nesting, and backward-compatible {{varName}}.
  */
-function resolveExpression(
+function resolveExpressionLocal(
   expression: string,
   nodeOutputs: Record<string, unknown>,
   ctx: ActionContext,
-  config: EngineConfig
+  _config: EngineConfig
 ): string {
-  const renderer = config.renderTemplate ?? defaultRenderTemplate;
-
-  // First try resolving dot-notation references like {{nodeId.output.field}}
-  let resolved = expression.replace(/\{\{([^}]+)\}\}/g, (match, path: string) => {
-    const parts = path.trim().split(".");
-    // Try navigating nodeOutputs first
-    let current: unknown = nodeOutputs;
-    for (const part of parts) {
-      if (current == null || typeof current !== "object") {
-        current = undefined;
-        break;
-      }
-      current = (current as Record<string, unknown>)[part];
-    }
-    if (current !== undefined && current !== null) {
-      return String(current);
-    }
-    // Fall back to simple var resolution
-    return match;
-  });
-
-  // Then resolve remaining simple {{var}} patterns against context vars
-  resolved = renderer(resolved, ctx.vars);
-  return resolved;
+  const exprCtx = buildExpressionContext(nodeOutputs, ctx);
+  return resolveTemplate(expression, exprCtx);
 }
 
 /**
@@ -1279,7 +1445,7 @@ function executeSwitchNode(
     return { type: "switch", expressionValue: "", matchedCase: defaultCase ?? null };
   }
 
-  const resolvedValue = resolveExpression(expression, nodeOutputs, ctx, config);
+  const resolvedValue = resolveExpressionLocal(expression, nodeOutputs, ctx, config);
 
   // Find matching case (trim both sides for resilience against whitespace)
   const trimmedResolved = resolvedValue.trim();
@@ -1301,51 +1467,43 @@ function executeSwitchNode(
 
 /**
  * Resolve an array expression from upstream outputs or context vars.
- * Returns the resolved array, or an error if the expression does not resolve to an array.
+ * Delegates to the expression-resolver for path resolution, with
+ * fallback JSON parsing for string values.
+ * Returns the resolved array, or an error string if resolution fails.
  */
 function resolveArray(
   arrayExpression: string,
   nodeOutputs: Record<string, unknown>,
   ctx: ActionContext
 ): unknown[] | string {
-  // Try evaluating as a dot-notation path first
-  const parts = arrayExpression.trim().replace(/^\{\{/, "").replace(/\}\}$/, "").split(".");
-  let current: unknown = nodeOutputs;
+  const exprCtx = buildExpressionContext(nodeOutputs, ctx);
 
-  for (const part of parts) {
-    if (current == null || typeof current !== "object") {
-      current = undefined;
-      break;
+  // Strip optional {{ }} wrapper so we get a raw expression path
+  const rawExpr = arrayExpression.trim().replace(/^\{\{/, "").replace(/\}\}$/, "").trim();
+
+  // Use the expression resolver to resolve the path
+  const resolved = resolveExpr(rawExpr, exprCtx);
+
+  // If resolved to a string, try JSON-parsing it as an array
+  if (typeof resolved === "string") {
+    try {
+      const parsed = JSON.parse(resolved);
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      // Not JSON
     }
-    current = (current as Record<string, unknown>)[part];
+    return `Array expression "${arrayExpression}" resolved to non-array string value`;
   }
 
-  // If not found in nodeOutputs, try context vars
-  if (current === undefined || current === null) {
-    const varKey = parts[0];
-    const varVal = ctx.vars[varKey];
-    if (varVal !== undefined) {
-      // Try parsing as JSON array
-      if (typeof varVal === "string") {
-        try {
-          const parsed = JSON.parse(varVal);
-          if (Array.isArray(parsed)) return parsed;
-        } catch {
-          // Not JSON, treat as error
-        }
-      }
-    }
-  }
-
-  if (current === undefined || current === null) {
+  if (resolved === undefined || resolved === null) {
     return `Array expression "${arrayExpression}" resolved to undefined`;
   }
 
-  if (!Array.isArray(current)) {
-    return `Array expression "${arrayExpression}" resolved to non-array value: ${typeof current}`;
+  if (!Array.isArray(resolved)) {
+    return `Array expression "${arrayExpression}" resolved to non-array value: ${typeof resolved}`;
   }
 
-  return current;
+  return resolved;
 }
 
 /**
@@ -1428,9 +1586,49 @@ async function executeLoopNode(
 
       if (bodyData.nodeType === "action") {
         const actionData = bodyData as ActionNodeData;
+
+        // Rate limiting in loop body
+        if (config.rateLimiter) {
+          let rateLimitResult;
+          try {
+            rateLimitResult = await config.rateLimiter.acquire(actionData.actionType);
+          } catch (rateLimitErr) {
+            // "fail" strategy throws — treat as iteration failure rather than crashing the whole workflow
+            const failOutput = { skipped: true, reason: "rate_limited", error: rateLimitErr instanceof Error ? rateLimitErr.message : String(rateLimitErr) };
+            nodeOutputs[bodyNodeId] = failOutput;
+            recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
+            emitLog(config.logger, (l) =>
+              l.onRateLimited?.(runId, bodyNodeId, actionData.actionType, "fail", 0)
+            );
+            emitLog(config.logger, (l) => l.onNodeError?.(runId, bodyNodeId, failOutput.error, false, 0));
+            iterationFailed = true;
+            iterationError = failOutput.error;
+            break;
+          }
+          if (!rateLimitResult.allowed) {
+            const skipOutput = { skipped: true, reason: "rate_limited" };
+            nodeOutputs[bodyNodeId] = skipOutput;
+            recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
+            emitLog(config.logger, (l) =>
+              l.onRateLimited?.(runId, bodyNodeId, actionData.actionType, "skip", rateLimitResult.waitedMs)
+            );
+            emitLog(config.logger, (l) => l.onNodeSkipped?.(runId, bodyNodeId, "rate_limited"));
+            iterationOutput = skipOutput;
+            // Enqueue downstream edges within body
+            const bodyEdges = outEdges.get(bodyNodeId) ?? [];
+            for (const be of bodyEdges) bodyQueue.push(be.target);
+            continue;
+          }
+          if (rateLimitResult.waitedMs > 0) {
+            emitLog(config.logger, (l) =>
+              l.onRateLimited?.(runId, bodyNodeId, actionData.actionType, "wait", rateLimitResult.waitedMs)
+            );
+          }
+        }
+
         emitLog(config.logger, (l) => l.onNodeStart?.(runId, bodyNodeId, "action", actionData.config));
         const result = await executeActionWithRetry(
-          actionData.actionType, actionData.config, ctx, config, actionData.retryConfig, bodyNodeId
+          actionData.actionType, actionData.config, ctx, config, actionData.retryConfig, bodyNodeId, nodeOutputs
         );
         nodeOutputs[bodyNodeId] = result;
         recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
@@ -1464,7 +1662,7 @@ async function executeLoopNode(
         iterationOutput = result.output;
       } else if (bodyData.nodeType === "condition") {
         emitLog(config.logger, (l) => l.onNodeStart?.(runId, bodyNodeId, "condition", (bodyData as ConditionNodeData).config as unknown as Record<string, unknown>));
-        const condResult = evaluateCondition(bodyData as ConditionNodeData, ctx);
+        const condResult = evaluateCondition(bodyData as ConditionNodeData, ctx, nodeOutputs);
         nodeOutputs[bodyNodeId] = { condition: condResult };
         recordTiming(nodeTimings, bodyNodeId, bodyStartedAt);
         emitLog(config.logger, (l) =>

@@ -6,7 +6,7 @@
 
 // ── Node data types ─────────────────────────────────────────────
 
-export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop";
+export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow";
 
 export interface TriggerNodeData {
   nodeType: "trigger";
@@ -133,6 +133,77 @@ export interface LoopNodeData {
   config: LoopConfig;
 }
 
+// ── Transform node types ─────────────────────────────────────────
+
+export interface AggregateOp {
+  field: string;
+  operation: "sum" | "count" | "avg" | "min" | "max";
+  alias: string;
+}
+
+export type TransformOperation =
+  | { type: "map"; expression: string }
+  | { type: "filter"; expression: string }
+  | { type: "sort"; key: string; direction: "asc" | "desc" }
+  | { type: "pick"; keys: string[] }
+  | { type: "omit"; keys: string[] }
+  | { type: "rename"; mapping: Record<string, string> }
+  | { type: "flatten"; depth?: number }
+  | { type: "group_by"; key: string }
+  | { type: "aggregate"; operations: AggregateOp[] }
+  | { type: "template"; template: string }
+  | { type: "json_parse" }
+  | { type: "json_stringify"; pretty?: boolean }
+  | { type: "unique"; key?: string }
+  | { type: "take"; count: number }
+  | { type: "skip"; count: number };
+
+export interface TransformConfig {
+  inputExpression: string;
+  operations: TransformOperation[];
+}
+
+export interface TransformNodeData {
+  nodeType: "transform";
+  label: string;
+  config: TransformConfig;
+}
+
+export interface TransformResult {
+  success: boolean;
+  output: unknown;
+  error?: string;
+  operationsApplied: number;
+}
+
+// ── Sub-Workflow types ──────────────────────────────────────────
+
+export interface SubWorkflowConfig {
+  workflowId: string;
+  /** Pin to a specific version of the sub-workflow */
+  version?: string;
+  /** Sub-workflow variable name -> expression to resolve from parent context */
+  inputMappings: Record<string, string>;
+  /** Parent variable name -> expression to resolve from sub-workflow output */
+  outputMappings: Record<string, string>;
+  /** Maximum nesting depth (default: 10) */
+  maxDepth?: number;
+}
+
+export interface SubWorkflowNodeData {
+  nodeType: "sub_workflow";
+  label: string;
+  config: SubWorkflowConfig;
+}
+
+/**
+ * Resolver that loads workflow definitions by ID (and optional version).
+ * Provided by consuming apps to enable sub-workflow execution.
+ */
+export interface WorkflowResolver {
+  resolve(workflowId: string, version?: string): Promise<WorkflowData | undefined>;
+}
+
 export type WorkflowNodeData =
   | TriggerNodeData
   | ActionNodeData
@@ -141,7 +212,9 @@ export type WorkflowNodeData =
   | TryCatchNodeData
   | CodeNodeData
   | SwitchNodeData
-  | LoopNodeData;
+  | LoopNodeData
+  | TransformNodeData
+  | SubWorkflowNodeData;
 
 // ── Node palette (what shows in the sidebar) ────────────────────
 
@@ -279,6 +352,7 @@ export interface ExecutionLogger {
   onNodeError?(runId: string, nodeId: string, error: string, willRetry: boolean, attempt: number): void;
   onNodeSkipped?(runId: string, nodeId: string, reason: string): void;
   onRetry?(runId: string, nodeId: string, attempt: number, delayMs: number): void;
+  onRateLimited?(runId: string, nodeId: string, actionType: string, strategy: string, waitedMs: number): void;
 }
 
 // ── Streaming types ─────────────────────────────────────────────
@@ -317,6 +391,8 @@ export interface ActionContext {
   workflowId: string;
   runId: string;
   vars: Record<string, string | number | undefined>;
+  /** Sub-workflow call stack for cycle detection. Managed by the engine. */
+  _callStack?: string[];
   [key: string]: unknown; // consumers can add their own context
 }
 
@@ -432,6 +508,72 @@ export interface ConnectorManifest {
   license?: string;
   /** Runtime dependencies required by this connector */
   dependencies?: Record<string, string>;
+}
+
+// ── Execution History ────────────────────────────────────────────
+
+export interface ExecutionRecord {
+  runId: string;
+  workflowId: string;
+  status: "running" | "completed" | "failed" | "paused";
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  triggerType?: string;
+  nodeEvents: NodeExecutionEvent[];
+  error?: string;
+  tags?: string[];
+}
+
+export interface NodeExecutionEvent {
+  nodeId: string;
+  nodeType: string;
+  status: "started" | "completed" | "failed" | "skipped" | "retried";
+  timestamp: string;
+  durationMs?: number;
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
+  error?: string;
+  attempt?: number;
+}
+
+export interface ExecutionHistoryQuery {
+  workflowId?: string;
+  status?: string;
+  search?: string;
+  triggerType?: string;
+  tags?: string[];
+  dateRange?: { start: string; end: string };
+  limit?: number;
+  offset?: number;
+}
+
+export interface ExecutionHistoryResult {
+  records: ExecutionRecord[];
+  total: number;
+  stats: ExecutionStats;
+}
+
+export interface ExecutionStats {
+  totalRuns: number;
+  successRate: number;
+  avgDurationMs: number;
+  failureCount: number;
+  runsByStatus: Record<string, number>;
+}
+
+export interface TimeSeriesBucket {
+  bucket: string;
+  total: number;
+  completed: number;
+  failed: number;
+  avgDurationMs: number;
+}
+
+export interface SerializedHistory {
+  version: 1;
+  records: ExecutionRecord[];
+  exportedAt: string;
 }
 
 // v0.1.1

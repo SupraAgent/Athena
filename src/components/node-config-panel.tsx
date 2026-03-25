@@ -12,8 +12,12 @@ import type {
   CodeNodeData,
   SwitchNodeData,
   LoopNodeData,
+  TransformNodeData,
+  TransformOperation,
+  AggregateOp,
   ConfigFieldDef,
   NodeTypeRegistration,
+  SubWorkflowNodeData,
 } from "../core/types";
 import { DEFAULT_OPERATORS } from "../core/types";
 import { useBuilderContext } from "./builder-context";
@@ -48,6 +52,8 @@ export function NodeConfigPanel({ node, onDataChange, onDelete }: NodeConfigPane
     code: "text-violet-400",
     switch: "text-cyan-400",
     loop: "text-indigo-400",
+    transform: "text-emerald-400",
+    sub_workflow: "text-sky-400",
   };
 
   // Look up registered config fields
@@ -107,6 +113,19 @@ export function NodeConfigPanel({ node, onDataChange, onDelete }: NodeConfigPane
       )}
       {data.nodeType === "loop" && (
         <LoopConfig data={data as LoopNodeData} updateConfig={updateConfig} />
+      )}
+      {data.nodeType === "transform" && (
+        <TransformConfigPanel
+          data={data as TransformNodeData}
+          onDataChange={(newData) => onDataChange(node.id, newData)}
+          updateConfig={updateConfig}
+        />
+      )}
+      {data.nodeType === "sub_workflow" && (
+        <SubWorkflowConfigPanel
+          data={data as SubWorkflowNodeData}
+          updateConfig={updateConfig}
+        />
       )}
 
       <div className="pt-3 border-t border-white/10">
@@ -679,7 +698,587 @@ function LoopConfig({
   );
 }
 
+// ── Transform config ─────────────────────────────────────────────
+
+const TRANSFORM_OP_TYPES = [
+  { value: "map", label: "Map" },
+  { value: "filter", label: "Filter" },
+  { value: "sort", label: "Sort" },
+  { value: "pick", label: "Pick Keys" },
+  { value: "omit", label: "Omit Keys" },
+  { value: "rename", label: "Rename Keys" },
+  { value: "flatten", label: "Flatten" },
+  { value: "group_by", label: "Group By" },
+  { value: "aggregate", label: "Aggregate" },
+  { value: "template", label: "Template" },
+  { value: "json_parse", label: "JSON Parse" },
+  { value: "json_stringify", label: "JSON Stringify" },
+  { value: "unique", label: "Unique" },
+  { value: "take", label: "Take" },
+  { value: "skip", label: "Skip" },
+] as const;
+
+function createDefaultOp(type: string): TransformOperation {
+  switch (type) {
+    case "map": return { type: "map", expression: "item" };
+    case "filter": return { type: "filter", expression: "item" };
+    case "sort": return { type: "sort", key: "", direction: "asc" };
+    case "pick": return { type: "pick", keys: [] };
+    case "omit": return { type: "omit", keys: [] };
+    case "rename": return { type: "rename", mapping: {} };
+    case "flatten": return { type: "flatten", depth: 1 };
+    case "group_by": return { type: "group_by", key: "" };
+    case "aggregate": return { type: "aggregate", operations: [] };
+    case "template": return { type: "template", template: "" };
+    case "json_parse": return { type: "json_parse" };
+    case "json_stringify": return { type: "json_stringify", pretty: false };
+    case "unique": return { type: "unique" };
+    case "take": return { type: "take", count: 10 };
+    case "skip": return { type: "skip", count: 0 };
+    default: return { type: "map", expression: "item" };
+  }
+}
+
+function TransformConfigPanel({
+  data,
+  onDataChange,
+  updateConfig,
+}: {
+  data: TransformNodeData;
+  onDataChange: (newData: WorkflowNodeData) => void;
+  updateConfig: (key: string, value: unknown) => void;
+}) {
+  const operations = data.config.operations ?? [];
+
+  function updateOperations(newOps: TransformOperation[]) {
+    onDataChange({
+      ...data,
+      config: { ...data.config, operations: newOps },
+    });
+  }
+
+  function addOperation(type: string) {
+    updateOperations([...operations, createDefaultOp(type)]);
+  }
+
+  function removeOperation(index: number) {
+    updateOperations(operations.filter((_, i) => i !== index));
+  }
+
+  function updateOperation(index: number, op: TransformOperation) {
+    const newOps = operations.map((o, i) => (i === index ? op : o));
+    updateOperations(newOps);
+  }
+
+  function moveOperation(index: number, direction: "up" | "down") {
+    const newIndex = direction === "up" ? index - 1 : index + 1;
+    if (newIndex < 0 || newIndex >= operations.length) return;
+    const newOps = [...operations];
+    [newOps[index], newOps[newIndex]] = [newOps[newIndex], newOps[index]];
+    updateOperations(newOps);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg bg-emerald-500/5 border border-emerald-500/10 px-3 py-2">
+        <p className="text-[10px] text-emerald-400/80">Data Transformation Pipeline</p>
+      </div>
+
+      <Field label="Input Expression">
+        <input
+          value={data.config.inputExpression ?? ""}
+          onChange={(e) => updateConfig("inputExpression", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="{{nodeId.output.items}}"
+        />
+      </Field>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] text-muted-foreground">Operations ({operations.length})</label>
+        </div>
+
+        {operations.map((op, i) => (
+          <div key={i} className="rounded-lg border border-white/10 bg-white/[0.02] p-2 space-y-2">
+            <div className="flex items-center gap-1">
+              <span className="text-[10px] font-medium text-emerald-400 flex-1 capitalize">{op.type.replace("_", " ")}</span>
+              <button
+                type="button"
+                onClick={() => moveOperation(i, "up")}
+                disabled={i === 0}
+                className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-30 px-1"
+                title="Move up"
+              >
+                ^
+              </button>
+              <button
+                type="button"
+                onClick={() => moveOperation(i, "down")}
+                disabled={i === operations.length - 1}
+                className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-30 px-1"
+                title="Move down"
+              >
+                v
+              </button>
+              <button
+                type="button"
+                onClick={() => removeOperation(i)}
+                className="text-red-400/70 hover:text-red-400 text-[10px] px-1"
+                title="Remove"
+              >
+                x
+              </button>
+            </div>
+            <TransformOpConfig op={op} onChange={(newOp) => updateOperation(i, newOp)} />
+          </div>
+        ))}
+
+        {operations.length === 0 && (
+          <p className="text-[10px] text-muted-foreground/50 italic">No operations defined</p>
+        )}
+
+        <div className="pt-1">
+          <select
+            value=""
+            onChange={(e) => {
+              if (e.target.value) addOperation(e.target.value);
+              e.target.value = "";
+            }}
+            className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs outline-none"
+          >
+            <option value="">+ Add operation...</option>
+            {TRANSFORM_OP_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="text-[10px] text-muted-foreground space-y-1.5">
+        <p>
+          Operations are applied in order. Each operation&apos;s output becomes the next operation&apos;s input.
+        </p>
+        <p>
+          Expressions can reference <code className="bg-white/5 px-1 rounded text-[9px]">item</code>,{" "}
+          <code className="bg-white/5 px-1 rounded text-[9px]">index</code>, and{" "}
+          <code className="bg-white/5 px-1 rounded text-[9px]">array</code>.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function TransformOpConfig({
+  op,
+  onChange,
+}: {
+  op: TransformOperation;
+  onChange: (op: TransformOperation) => void;
+}) {
+  switch (op.type) {
+    case "map":
+    case "filter":
+      return (
+        <textarea
+          value={op.expression}
+          onChange={(e) => onChange({ ...op, expression: e.target.value })}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1.5 text-[10px] resize-none outline-none focus:border-white/20 font-mono"
+          rows={2}
+          placeholder={op.type === "map" ? "item.price * 1.1" : "item.price > 100"}
+        />
+      );
+
+    case "sort":
+      return (
+        <div className="flex gap-1.5">
+          <input
+            value={op.key}
+            onChange={(e) => onChange({ ...op, key: e.target.value })}
+            className="flex-1 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+            placeholder="Sort key (e.g. price)"
+          />
+          <select
+            value={op.direction}
+            onChange={(e) => onChange({ ...op, direction: e.target.value as "asc" | "desc" })}
+            className="rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none"
+          >
+            <option value="asc">Asc</option>
+            <option value="desc">Desc</option>
+          </select>
+        </div>
+      );
+
+    case "pick":
+    case "omit":
+      return (
+        <input
+          value={op.keys.join(", ")}
+          onChange={(e) =>
+            onChange({
+              ...op,
+              keys: e.target.value.split(",").map((k) => k.trim()).filter(Boolean),
+            })
+          }
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+          placeholder="key1, key2, key3"
+        />
+      );
+
+    case "rename": {
+      const entries = Object.entries(op.mapping);
+      return (
+        <div className="space-y-1">
+          {entries.map(([from, to], i) => (
+            <div key={i} className="flex gap-1 items-center">
+              <input
+                value={from}
+                onChange={(e) => {
+                  const newMapping = { ...op.mapping };
+                  delete newMapping[from];
+                  newMapping[e.target.value] = to;
+                  onChange({ ...op, mapping: newMapping });
+                }}
+                className="flex-1 rounded border border-white/10 bg-transparent px-1.5 py-0.5 text-[10px] outline-none"
+                placeholder="from"
+              />
+              <span className="text-[10px] text-muted-foreground">&rarr;</span>
+              <input
+                value={to}
+                onChange={(e) => {
+                  onChange({ ...op, mapping: { ...op.mapping, [from]: e.target.value } });
+                }}
+                className="flex-1 rounded border border-white/10 bg-transparent px-1.5 py-0.5 text-[10px] outline-none"
+                placeholder="to"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const newMapping = { ...op.mapping };
+                  delete newMapping[from];
+                  onChange({ ...op, mapping: newMapping });
+                }}
+                className="text-red-400/70 hover:text-red-400 text-[10px] px-0.5"
+              >
+                x
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() => onChange({ ...op, mapping: { ...op.mapping, "": "" } })}
+            className="text-[10px] text-emerald-400 hover:text-emerald-300"
+          >
+            + Add mapping
+          </button>
+        </div>
+      );
+    }
+
+    case "flatten":
+      return (
+        <input
+          type="number"
+          value={op.depth ?? 1}
+          onChange={(e) => onChange({ ...op, depth: parseInt(e.target.value, 10) || 1 })}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+          placeholder="Depth"
+          min={1}
+          max={10}
+        />
+      );
+
+    case "group_by":
+      return (
+        <input
+          value={op.key}
+          onChange={(e) => onChange({ ...op, key: e.target.value })}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+          placeholder="Group key (e.g. category)"
+        />
+      );
+
+    case "aggregate": {
+      const aggOps = op.operations ?? [];
+      return (
+        <div className="space-y-1">
+          {aggOps.map((agg, i) => (
+            <div key={i} className="flex gap-1 items-center">
+              <input
+                value={agg.field}
+                onChange={(e) => {
+                  const newAggs = [...aggOps];
+                  newAggs[i] = { ...agg, field: e.target.value };
+                  onChange({ ...op, operations: newAggs });
+                }}
+                className="flex-1 rounded border border-white/10 bg-transparent px-1.5 py-0.5 text-[10px] outline-none"
+                placeholder="field"
+              />
+              <select
+                value={agg.operation}
+                onChange={(e) => {
+                  const newAggs = [...aggOps];
+                  newAggs[i] = { ...agg, operation: e.target.value as AggregateOp["operation"] };
+                  onChange({ ...op, operations: newAggs });
+                }}
+                className="rounded border border-white/10 bg-transparent px-1 py-0.5 text-[10px] outline-none"
+              >
+                <option value="sum">Sum</option>
+                <option value="count">Count</option>
+                <option value="avg">Avg</option>
+                <option value="min">Min</option>
+                <option value="max">Max</option>
+              </select>
+              <input
+                value={agg.alias}
+                onChange={(e) => {
+                  const newAggs = [...aggOps];
+                  newAggs[i] = { ...agg, alias: e.target.value };
+                  onChange({ ...op, operations: newAggs });
+                }}
+                className="flex-1 rounded border border-white/10 bg-transparent px-1.5 py-0.5 text-[10px] outline-none"
+                placeholder="alias"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onChange({ ...op, operations: aggOps.filter((_, j) => j !== i) });
+                }}
+                className="text-red-400/70 hover:text-red-400 text-[10px] px-0.5"
+              >
+                x
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={() =>
+              onChange({
+                ...op,
+                operations: [...aggOps, { field: "", operation: "sum", alias: "" }],
+              })
+            }
+            className="text-[10px] text-emerald-400 hover:text-emerald-300"
+          >
+            + Add aggregation
+          </button>
+        </div>
+      );
+    }
+
+    case "template":
+      return (
+        <textarea
+          value={op.template}
+          onChange={(e) => onChange({ ...op, template: e.target.value })}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1.5 text-[10px] resize-none outline-none focus:border-white/20 font-mono"
+          rows={2}
+          placeholder="Hello {{item.name}}, your total is {{item.total}}"
+        />
+      );
+
+    case "json_parse":
+      return <p className="text-[10px] text-muted-foreground/60">Parses JSON string(s) to objects.</p>;
+
+    case "json_stringify":
+      return (
+        <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={op.pretty ?? false}
+            onChange={(e) => onChange({ ...op, pretty: e.target.checked })}
+            className="rounded border-white/10"
+          />
+          Pretty print
+        </label>
+      );
+
+    case "unique":
+      return (
+        <input
+          value={op.key ?? ""}
+          onChange={(e) => onChange({ ...op, key: e.target.value || undefined })}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+          placeholder="Key to deduplicate by (optional)"
+        />
+      );
+
+    case "take":
+    case "skip":
+      return (
+        <input
+          type="number"
+          value={op.count}
+          onChange={(e) => onChange({ ...op, count: parseInt(e.target.value, 10) || 0 })}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] outline-none focus:border-white/20"
+          placeholder={op.type === "take" ? "Number of items" : "Items to skip"}
+          min={0}
+        />
+      );
+
+    default:
+      return null;
+  }
+}
+
 // ── Shared field wrapper ─────────────────────────────────────────
+
+// ── Sub-Workflow config ──────────────────────────────────────────
+
+function SubWorkflowConfigPanel({
+  data,
+  updateConfig,
+}: {
+  data: SubWorkflowNodeData;
+  updateConfig: (key: string, value: unknown) => void;
+}) {
+  const config = data.config;
+  const inputMappings = config.inputMappings ?? {};
+  const outputMappings = config.outputMappings ?? {};
+
+  function updateMapping(
+    type: "inputMappings" | "outputMappings",
+    mappings: Record<string, string>,
+    oldKey: string,
+    newKey: string,
+    newValue: string
+  ) {
+    const updated = { ...mappings };
+    if (oldKey !== newKey) {
+      delete updated[oldKey];
+    }
+    if (newKey) {
+      updated[newKey] = newValue;
+    }
+    updateConfig(type, updated);
+  }
+
+  function addMapping(type: "inputMappings" | "outputMappings") {
+    const existing = type === "inputMappings" ? inputMappings : outputMappings;
+    const newKey = `var_${Object.keys(existing).length + 1}`;
+    updateConfig(type, { ...existing, [newKey]: "" });
+  }
+
+  function removeMapping(type: "inputMappings" | "outputMappings", key: string) {
+    const existing = type === "inputMappings" ? inputMappings : outputMappings;
+    const updated = { ...existing };
+    delete updated[key];
+    updateConfig(type, updated);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg bg-sky-500/5 border border-sky-500/10 px-3 py-2">
+        <p className="text-[10px] text-sky-400/80">Sub-Workflow: Execute another workflow as a step</p>
+      </div>
+
+      <Field label="Workflow ID">
+        <input
+          value={config.workflowId ?? ""}
+          onChange={(e) => updateConfig("workflowId", e.target.value)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="workflow-id"
+        />
+      </Field>
+
+      <Field label="Version (optional)">
+        <input
+          value={config.version ?? ""}
+          onChange={(e) => updateConfig("version", e.target.value || undefined)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="e.g. 1.0.0"
+        />
+      </Field>
+
+      <Field label="Max Depth">
+        <input
+          type="number"
+          value={config.maxDepth ?? 10}
+          onChange={(e) => updateConfig("maxDepth", Number(e.target.value) || 10)}
+          className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-1.5 text-xs h-8 outline-none focus:border-white/20"
+          placeholder="10"
+          min={1}
+          max={50}
+        />
+      </Field>
+
+      {/* Input Mappings */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] text-muted-foreground">Input Mappings</label>
+          <button
+            type="button"
+            onClick={() => addMapping("inputMappings")}
+            className="text-[9px] text-sky-400 hover:text-sky-300 transition-colors"
+          >
+            + Add
+          </button>
+        </div>
+        {Object.entries(inputMappings).map(([key, value]) => (
+          <div key={key} className="flex gap-1 items-center">
+            <input
+              value={key}
+              onChange={(e) => updateMapping("inputMappings", inputMappings, key, e.target.value, value)}
+              className="flex-1 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] h-7 outline-none focus:border-white/20"
+              placeholder="child var"
+            />
+            <span className="text-[10px] text-muted-foreground shrink-0">&larr;</span>
+            <input
+              value={value}
+              onChange={(e) => updateMapping("inputMappings", inputMappings, key, key, e.target.value)}
+              className="flex-1 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] h-7 outline-none focus:border-white/20"
+              placeholder="{{parent.expr}}"
+            />
+            <button
+              type="button"
+              onClick={() => removeMapping("inputMappings", key)}
+              className="text-red-400 hover:text-red-300 text-[10px] px-1 shrink-0"
+            >
+              x
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Output Mappings */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-[10px] text-muted-foreground">Output Mappings</label>
+          <button
+            type="button"
+            onClick={() => addMapping("outputMappings")}
+            className="text-[9px] text-sky-400 hover:text-sky-300 transition-colors"
+          >
+            + Add
+          </button>
+        </div>
+        {Object.entries(outputMappings).map(([key, value]) => (
+          <div key={key} className="flex gap-1 items-center">
+            <input
+              value={key}
+              onChange={(e) => updateMapping("outputMappings", outputMappings, key, e.target.value, value)}
+              className="flex-1 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] h-7 outline-none focus:border-white/20"
+              placeholder="parent var"
+            />
+            <span className="text-[10px] text-muted-foreground shrink-0">&larr;</span>
+            <input
+              value={value}
+              onChange={(e) => updateMapping("outputMappings", outputMappings, key, key, e.target.value)}
+              className="flex-1 rounded-lg border border-white/10 bg-transparent px-2 py-1 text-[10px] h-7 outline-none focus:border-white/20"
+              placeholder="{{child_node.output}}"
+            />
+            <button
+              type="button"
+              onClick={() => removeMapping("outputMappings", key)}
+              className="text-red-400 hover:text-red-300 text-[10px] px-1 shrink-0"
+            >
+              x
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

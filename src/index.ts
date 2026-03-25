@@ -17,6 +17,14 @@ export type {
   SwitchConfig,
   SwitchCase,
   LoopConfig,
+  TransformNodeData,
+  TransformConfig,
+  TransformOperation,
+  TransformResult,
+  AggregateOp,
+  SubWorkflowNodeData,
+  SubWorkflowConfig,
+  WorkflowResolver,
   WorkflowNodeData,
   ConditionOperator,
   // Retry
@@ -54,6 +62,14 @@ export type {
   StreamChunk,
   StreamingActionResult,
   OnStreamCallback,
+  // Execution History
+  ExecutionRecord,
+  NodeExecutionEvent,
+  ExecutionHistoryQuery,
+  ExecutionHistoryResult,
+  ExecutionStats,
+  TimeSeriesBucket,
+  SerializedHistory,
 } from "./core/types";
 
 export { DEFAULT_OPERATORS } from "./core/types";
@@ -66,9 +82,50 @@ export {
   type EngineConfig,
 } from "./core/engine";
 
+export {
+  resolveExpression,
+  resolveTemplate,
+  resolveAllValues,
+  type ExpressionContext,
+} from "./core/expression-resolver";
+
 export { cn } from "./core/utils";
 
+// ── Sub-Workflow Validator ────────────────────────────────────────
+export {
+  validateSubWorkflow,
+  type SubWorkflowValidationResult,
+} from "./core/sub-workflow-validator";
+
+// ── Data Mapper ──────────────────────────────────────────────────
+export { applyTransformPipeline } from "./core/data-mapper";
+
+// ── Rate Limiter ─────────────────────────────────────────────────
+export {
+  TokenBucketRateLimiter,
+  type RateLimitConfig,
+  type RateLimitAcquireResult,
+  type RateLimitStatus,
+} from "./core/rate-limiter";
+
+// ── Smart Defaults ───────────────────────────────────────────────
+export {
+  computeSmartDefaults,
+  detectUpstreamFromEdges,
+  BUILTIN_SMART_DEFAULT_RULES,
+  type SmartDefaultContext,
+  type SmartDefaultRule,
+} from "./core/smart-defaults";
+
 export { ConsoleLogger } from "./core/console-logger";
+
+export { ExecutionHistoryStore } from "./core/execution-history";
+
+export {
+  formatRunSummary,
+  formatNodeEvent,
+  formatDuration,
+} from "./core/plain-language";
 
 // ── Components ──────────────────────────────────────────────────
 export { FlowCanvas, type FlowCanvasProps } from "./components/flow-canvas";
@@ -85,6 +142,8 @@ export { TryCatchNode } from "./components/nodes/try-catch-node";
 export { CodeNode } from "./components/nodes/code-node";
 export { SwitchNode } from "./components/nodes/switch-node";
 export { LoopNode } from "./components/nodes/loop-node";
+export { TransformNode } from "./components/nodes/transform-node";
+export { SubWorkflowNode } from "./components/nodes/sub-workflow-node";
 
 // ── Personas & Agents ────────────────────────────────────────────
 export type { CPOPersona, ProductThesis, DecisionHeuristic, StrategicPriority } from "./personas";
@@ -149,6 +208,9 @@ export {
   type SchemaValidationResult,
   type WorkflowPortabilityMetadata,
 } from "./core/portability";
+
+// ── Execution History ────────────────────────────────────────────
+export { ExecutionHistoryPanel, type ExecutionHistoryPanelProps } from "./components/execution-history";
 
 // ── Built-in connectors ──────────────────────────────────────────
 export { webhookConnector } from "./connectors";

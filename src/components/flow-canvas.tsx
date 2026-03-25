@@ -27,10 +27,13 @@ import { TryCatchNode } from "./nodes/try-catch-node";
 import { CodeNode } from "./nodes/code-node";
 import { SwitchNode } from "./nodes/switch-node";
 import { LoopNode } from "./nodes/loop-node";
+import { TransformNode } from "./nodes/transform-node";
+import { SubWorkflowNode } from "./nodes/sub-workflow-node";
 import { NodeSidebar } from "./node-sidebar";
 import { NodeConfigPanel } from "./node-config-panel";
-import type { WorkflowNodeData } from "../core/types";
+import type { WorkflowNodeData, NodeRegistry, FlowNode as CoreFlowNode, FlowEdge as CoreFlowEdge } from "../core/types";
 import { autoLayout } from "../core/auto-layout";
+import { computeSmartDefaults, detectUpstreamFromEdges, type SmartDefaultRule } from "../core/smart-defaults";
 
 const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
@@ -41,6 +44,8 @@ const nodeTypes: NodeTypes = {
   code: CodeNode,
   switch: SwitchNode,
   loop: LoopNode,
+  transform: TransformNode,
+  sub_workflow: SubWorkflowNode,
 };
 
 export interface FlowCanvasProps {
@@ -56,6 +61,10 @@ export interface FlowCanvasProps {
   hideSidebar?: boolean;
   /** Hide the config panel */
   hideConfigPanel?: boolean;
+  /** Node registry for smart defaults. When provided, newly dropped nodes get intelligent defaults. */
+  registry?: NodeRegistry;
+  /** Custom smart default rules to run in addition to built-in rules. */
+  smartDefaultRules?: SmartDefaultRule[];
 }
 
 let nodeId = 0;
@@ -72,6 +81,8 @@ function FlowCanvasInner({
   customNodeTypes,
   hideSidebar,
   hideConfigPanel,
+  registry,
+  smartDefaultRules,
 }: FlowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(autoLayout(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -159,8 +170,57 @@ function FlowCanvasInner({
         data = { nodeType: "switch", label, config: { expression: "", cases: [], defaultCase: "default", ...defaultConfig } };
       } else if (nodeType === "loop") {
         data = { nodeType: "loop", label, config: { arrayExpression: "", itemVariable: "item", maxIterations: 100, ...defaultConfig } };
+      } else if (nodeType === "transform") {
+        data = { nodeType: "transform", label, config: { inputExpression: "", operations: [], ...defaultConfig } };
+      } else if (nodeType === "sub_workflow") {
+        data = { nodeType: "sub_workflow", label, config: { workflowId: "", inputMappings: {}, outputMappings: {}, maxDepth: 10, ...defaultConfig } };
       } else {
         data = { nodeType: "delay", label, config: { duration: 1, unit: "hours", ...defaultConfig } };
+      }
+
+      // Smart defaults: compute intelligent defaults based on workflow context
+      if (registry) {
+        try {
+          // Convert current nodes/edges to core types for the smart defaults engine
+          const coreNodes: CoreFlowNode[] = nodes.map((n) => ({
+            id: n.id,
+            type: n.type ?? "action",
+            position: n.position,
+            data: n.data as unknown as WorkflowNodeData,
+          }));
+          const coreEdges: CoreFlowEdge[] = edges.map((e) => ({
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            sourceHandle: e.sourceHandle,
+          }));
+
+          // Detect upstream node from drop position
+          const upstreamNodeId = detectUpstreamFromEdges(position, coreNodes, coreEdges);
+
+          const smartDefaults = computeSmartDefaults(
+            {
+              newNodeType: nodeType,
+              newNodeSubType: subType,
+              existingNodes: coreNodes,
+              existingEdges: coreEdges,
+              registry,
+              upstreamNodeId,
+            },
+            smartDefaultRules
+          );
+
+          // Merge smart defaults into the node's config (smart defaults override defaultConfig)
+          if (Object.keys(smartDefaults).length > 0) {
+            const currentConfig = (data as { config: Record<string, unknown> }).config;
+            (data as { config: Record<string, unknown> }).config = {
+              ...currentConfig,
+              ...smartDefaults,
+            };
+          }
+        } catch {
+          // Smart defaults must never prevent node creation
+        }
       }
 
       const newNode: Node = {
@@ -172,7 +232,7 @@ function FlowCanvasInner({
 
       setNodes((nds) => [...nds, newNode]);
     },
-    [reactFlowInstance, setNodes]
+    [reactFlowInstance, setNodes, nodes, edges, registry, smartDefaultRules]
   );
 
   const onNodeClick = React.useCallback((_event: React.MouseEvent, node: Node) => {
@@ -250,6 +310,8 @@ function FlowCanvasInner({
                 case "code": return "rgba(139, 92, 246, 0.5)";
                 case "switch": return "rgba(6, 182, 212, 0.5)";
                 case "loop": return "rgba(99, 102, 241, 0.5)";
+                case "transform": return "rgba(16, 185, 129, 0.5)";
+                case "sub_workflow": return "rgba(56, 189, 248, 0.5)";
                 default: return "rgba(255,255,255,0.1)";
               }
             }}

@@ -56,6 +56,22 @@ const DEFAULT_LOGIC: NodePaletteItem[] = [
     icon: "Repeat",
     defaultConfig: { arrayExpression: "", itemVariable: "item", maxIterations: 100 },
   },
+  {
+    type: "transform",
+    subType: "transform",
+    label: "Transform",
+    description: "Transform data pipeline",
+    icon: "Shuffle",
+    defaultConfig: { inputExpression: "", operations: [] },
+  },
+  {
+    type: "sub_workflow",
+    subType: "sub_workflow",
+    label: "Sub-Workflow",
+    description: "Execute another workflow",
+    icon: "Workflow",
+    defaultConfig: { workflowId: "", inputMappings: {}, outputMappings: {}, maxDepth: 10 },
+  },
 ];
 
 export interface BuilderContextValue {
