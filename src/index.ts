@@ -52,6 +52,10 @@ export { ActionNode } from "./components/nodes/action-node";
 export { ConditionNode } from "./components/nodes/condition-node";
 export { DelayNode } from "./components/nodes/delay-node";
 
+// ── Personas & Agents ────────────────────────────────────────────
+export type { CPOPersona, ProductThesis, DecisionHeuristic, StrategicPriority } from "./personas";
+export { CPO_N8N, CPO_IFTTT, CPO_CRYPTO_AUTOMATION } from "./personas";
+
 // ── Consumer registries ─────────────────────────────────────────
 export {
   SUPRATEAM_REGISTRY,
