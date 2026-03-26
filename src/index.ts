@@ -323,6 +323,9 @@ export { AppletMarketplace, type AppletMarketplaceProps } from "./components/app
 export { AppletConfigModal, type AppletConfigModalProps } from "./components/applet-config-modal";
 export { AppletInstances, type AppletInstancesProps } from "./components/applet-instances";
 
+// ── Template Persistence (localStorage CRUD) ─────────────────────
+export { TemplatePersistence } from "./core/template-persistence";
+
 // ── Undo/Redo ────────────────────────────────────────────────────
 export { useUndoRedo } from "./core/use-undo-redo";
 
