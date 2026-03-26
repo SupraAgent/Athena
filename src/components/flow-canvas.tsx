@@ -83,6 +83,8 @@ export interface FlowCanvasProps {
   showUndoRedoButtons?: boolean;
   /** Enable right-click context menu on nodes (Edit, Duplicate, Delete). Default: true */
   enableContextMenu?: boolean;
+  /** When set, exposes { nodes, edges } on window[canvasStateKey] for external integrations (e.g. AI chat). */
+  canvasStateKey?: string;
 }
 
 function getNodeId() {
@@ -104,6 +106,7 @@ function FlowCanvasInner({
   enableUndoRedo = true,
   showUndoRedoButtons = true,
   enableContextMenu = true,
+  canvasStateKey,
 }: FlowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(autoLayout(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -127,6 +130,12 @@ function FlowCanvasInner({
     setNodesDirectly,
     setEdgesDirectly
   );
+
+  // Expose canvas state on window for external integrations (AI chat, template save, etc.)
+  React.useEffect(() => {
+    if (!canvasStateKey) return;
+    (window as unknown as Record<string, unknown>)[canvasStateKey] = { nodes, edges };
+  }, [canvasStateKey, nodes, edges]);
 
   // Listen for group container child additions (scoped to this canvas instance)
   React.useEffect(() => {
