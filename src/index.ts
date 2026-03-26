@@ -45,6 +45,9 @@ export type {
   AINodeResult,
   AINodeData,
   AISuggestion,
+  // Group Container
+  GroupContainerChild,
+  GroupContainerNodeData,
   // Retry
   RetryConfig,
   // Palette
@@ -225,6 +228,7 @@ export { ScheduleNode } from "./components/nodes/schedule-node";
 export { DatabaseNode } from "./components/nodes/database-node";
 export { AINode } from "./components/nodes/ai-node";
 export { AISuggestionsPanel, type AISuggestionsPanelProps } from "./components/ai-suggestions-panel";
+export { GroupContainerNode } from "./components/nodes/group-container-node";
 
 // ── Personas & Agents ────────────────────────────────────────────
 export type { CPOPersona, ProductThesis, DecisionHeuristic, StrategicPriority } from "./personas";
@@ -273,6 +277,7 @@ export {
 } from "./core/template-utils";
 
 export { TemplateBrowser, type TemplateBrowserProps } from "./components/template-browser";
+export { TemplateManager, type TemplateManagerProps, type ManagedTemplate } from "./components/template-manager";
 
 // ── Workflow Portability ──────────────────────────────────────────
 export {
@@ -313,6 +318,9 @@ export { EXAMPLE_APPLETS } from "./core/example-applets";
 export { AppletMarketplace, type AppletMarketplaceProps } from "./components/applet-marketplace";
 export { AppletConfigModal, type AppletConfigModalProps } from "./components/applet-config-modal";
 export { AppletInstances, type AppletInstancesProps } from "./components/applet-instances";
+
+// ── Undo/Redo ────────────────────────────────────────────────────
+export { useUndoRedo } from "./core/use-undo-redo";
 
 // ── Built-in connectors ──────────────────────────────────────────
 export { webhookConnector } from "./connectors";

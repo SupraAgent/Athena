@@ -32,11 +32,14 @@ import { SubWorkflowNode } from "./nodes/sub-workflow-node";
 import { ScheduleNode } from "./nodes/schedule-node";
 import { DatabaseNode } from "./nodes/database-node";
 import { AINode } from "./nodes/ai-node";
+import { GroupContainerNode } from "./nodes/group-container-node";
+import type { GroupContainerChild } from "./nodes/group-container-node";
 import { NodeSidebar } from "./node-sidebar";
 import { NodeConfigPanel } from "./node-config-panel";
 import type { WorkflowNodeData, NodeRegistry, FlowNode as CoreFlowNode, FlowEdge as CoreFlowEdge } from "../core/types";
 import { autoLayout } from "../core/auto-layout";
 import { computeSmartDefaults, detectUpstreamFromEdges, type SmartDefaultRule } from "../core/smart-defaults";
+import { useUndoRedo } from "../core/use-undo-redo";
 
 const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
@@ -52,6 +55,7 @@ const nodeTypes: NodeTypes = {
   schedule: ScheduleNode,
   database: DatabaseNode,
   ai: AINode,
+  group_container: GroupContainerNode,
 };
 
 export interface FlowCanvasProps {
@@ -71,6 +75,10 @@ export interface FlowCanvasProps {
   registry?: NodeRegistry;
   /** Custom smart default rules to run in addition to built-in rules. */
   smartDefaultRules?: SmartDefaultRule[];
+  /** Enable undo/redo (Ctrl+Z / Ctrl+Shift+Z). Default: true */
+  enableUndoRedo?: boolean;
+  /** Show undo/redo buttons in the toolbar. Default: true when enableUndoRedo is true */
+  showUndoRedoButtons?: boolean;
 }
 
 function getNodeId() {
@@ -89,12 +97,44 @@ function FlowCanvasInner({
   hideConfigPanel,
   registry,
   smartDefaultRules,
+  enableUndoRedo = true,
+  showUndoRedoButtons = true,
 }: FlowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(autoLayout(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [selectedNode, setSelectedNode] = React.useState<Node | null>(null);
   const reactFlowWrapper = React.useRef<HTMLDivElement>(null);
   const [reactFlowInstance, setReactFlowInstance] = React.useState<ReturnType<typeof import("@xyflow/react").useReactFlow> | null>(null);
+
+  // Undo/redo
+  const setNodesDirectly = React.useCallback((n: Node[]) => setNodes(n), [setNodes]);
+  const setEdgesDirectly = React.useCallback((e: Edge[]) => setEdges(e), [setEdges]);
+  const { undo, redo, canUndo, canRedo } = useUndoRedo(
+    nodes,
+    edges,
+    setNodesDirectly,
+    setEdgesDirectly
+  );
+
+  // Listen for group container child additions
+  React.useEffect(() => {
+    function handleGroupAddChild(event: Event) {
+      const { nodeId, child } = (event as CustomEvent<{ nodeId: string; child: GroupContainerChild }>).detail;
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id !== nodeId) return n;
+          const data = n.data as Record<string, unknown>;
+          const existing = (data.children as GroupContainerChild[]) ?? [];
+          return {
+            ...n,
+            data: { ...data, children: [...existing, child] },
+          };
+        })
+      );
+    }
+    window.addEventListener("supra:group-add-child", handleGroupAddChild);
+    return () => window.removeEventListener("supra:group-add-child", handleGroupAddChild);
+  }, [setNodes]);
 
   const mergedNodeTypes = React.useMemo(
     () => ({ ...nodeTypes, ...customNodeTypes }),
@@ -184,6 +224,8 @@ function FlowCanvasInner({
         data = { nodeType: "schedule", label, config: { mode: "interval", interval: { value: 5, unit: "minutes" }, ...defaultConfig } };
       } else if (nodeType === "ai") {
         data = { nodeType: "ai", label, config: { provider: "", model: "", prompt: "", temperature: 0.7, maxToolRounds: 5, ...defaultConfig } };
+      } else if (nodeType === "group_container") {
+        data = { nodeType: "group_container", label, children: [], config: { ...defaultConfig } } as unknown as WorkflowNodeData;
       } else {
         data = { nodeType: "delay", label, config: { duration: 1, unit: "hours", ...defaultConfig } };
       }
@@ -339,11 +381,32 @@ function FlowCanvasInner({
         />
       )}
 
-      {saving && (
-        <div className="absolute top-3 right-3 text-[10px] text-muted-foreground/50">
-          Saving…
-        </div>
-      )}
+      {/* Undo/Redo + status bar */}
+      <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5">
+        {enableUndoRedo && showUndoRedoButtons && (
+          <>
+            <button
+              onClick={undo}
+              disabled={!canUndo}
+              className="rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-xs font-medium text-foreground hover:bg-white/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Undo (Ctrl+Z)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg>
+            </button>
+            <button
+              onClick={redo}
+              disabled={!canRedo}
+              className="rounded-lg border border-white/10 bg-white/[0.05] px-2 py-1.5 text-xs font-medium text-foreground hover:bg-white/10 transition disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Redo (Ctrl+Shift+Z)"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6.69 3L21 13"/></svg>
+            </button>
+          </>
+        )}
+        {saving && (
+          <span className="text-[10px] text-muted-foreground/50">Saving…</span>
+        )}
+      </div>
     </div>
   );
 }

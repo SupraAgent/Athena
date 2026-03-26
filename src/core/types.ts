@@ -6,7 +6,7 @@
 
 // ── Node data types ─────────────────────────────────────────────
 
-export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow" | "schedule" | "database" | "ai";
+export type WorkflowNodeType = "trigger" | "action" | "condition" | "delay" | "try_catch" | "code" | "switch" | "loop" | "transform" | "sub_workflow" | "schedule" | "database" | "ai" | "group_container";
 
 export interface TriggerNodeData {
   nodeType: "trigger";
@@ -356,6 +356,31 @@ export interface AINodeData {
   config: AINodeConfig;
 }
 
+// ── Group Container Node ─────────────────────────────────────────
+
+export interface GroupContainerChild {
+  id: string;
+  label: string;
+  icon?: string;
+  color?: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface GroupContainerNodeData {
+  nodeType: "group_container";
+  label: string;
+  children: GroupContainerChild[];
+  /** Accept this drag type (defaults to "application/reactflow-group-item") */
+  acceptType?: string;
+  /** Max children allowed (0 = unlimited) */
+  maxChildren?: number;
+  /** Color accent ("blue", "purple", "emerald", "orange", "primary") */
+  accent?: string;
+  /** Placeholder text when empty */
+  emptyText?: string;
+  config: Record<string, unknown>;
+}
+
 // ── AI Suggestion types ─────────────────────────────────────────
 
 export interface AISuggestion {
@@ -386,7 +411,8 @@ export type WorkflowNodeData =
   | SubWorkflowNodeData
   | ScheduleNodeData
   | DatabaseNodeData
-  | AINodeData;
+  | AINodeData
+  | GroupContainerNodeData;
 
 // ── Node palette (what shows in the sidebar) ────────────────────
 
