@@ -212,6 +212,7 @@ export { FlowCanvas, type FlowCanvasProps } from "./components/flow-canvas";
 export { NodeSidebar } from "./components/node-sidebar";
 export { NodeConfigPanel } from "./components/node-config-panel";
 export { BuilderProvider, useBuilderContext, type BuilderProviderProps } from "./components/builder-context";
+export { CanvasIdContext } from "./components/canvas-id-context";
 
 // ── Node components (for custom node type composition) ──────────
 export { TriggerNode } from "./components/nodes/trigger-node";
