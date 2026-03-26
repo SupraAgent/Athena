@@ -30,12 +30,26 @@ export interface GroupContainerNodeData {
 
 // ── Color helpers ────────────────────────────────────────────────
 
-const ACCENT_STYLES: Record<string, { border: string; bg: string; ring: string; text: string }> = {
-  blue: { border: "border-blue-500/30", bg: "bg-blue-500/5", ring: "ring-blue-500/40", text: "text-blue-400" },
-  purple: { border: "border-purple-500/30", bg: "bg-purple-500/5", ring: "ring-purple-500/40", text: "text-purple-400" },
-  emerald: { border: "border-emerald-500/30", bg: "bg-emerald-500/5", ring: "ring-emerald-500/40", text: "text-emerald-400" },
-  orange: { border: "border-orange-500/30", bg: "bg-orange-500/5", ring: "ring-orange-500/40", text: "text-orange-400" },
-  primary: { border: "border-primary/30", bg: "bg-primary/5", ring: "ring-primary/40", text: "text-primary" },
+const ACCENT_STYLES: Record<string, { border: string; bg: string; ring: string; text: string; handleBg: string }> = {
+  blue: { border: "border-blue-500/30", bg: "bg-blue-500/5", ring: "ring-blue-500/40", text: "text-blue-400", handleBg: "!bg-blue-400" },
+  purple: { border: "border-purple-500/30", bg: "bg-purple-500/5", ring: "ring-purple-500/40", text: "text-purple-400", handleBg: "!bg-purple-400" },
+  emerald: { border: "border-emerald-500/30", bg: "bg-emerald-500/5", ring: "ring-emerald-500/40", text: "text-emerald-400", handleBg: "!bg-emerald-400" },
+  orange: { border: "border-orange-500/30", bg: "bg-orange-500/5", ring: "ring-orange-500/40", text: "text-orange-400", handleBg: "!bg-orange-400" },
+  primary: { border: "border-primary/30", bg: "bg-primary/5", ring: "ring-primary/40", text: "text-primary", handleBg: "!bg-primary" },
+};
+
+// Static lookup for child color bars — avoids dynamic Tailwind class construction
+const CHILD_COLOR_CLASSES: Record<string, string> = {
+  blue: "bg-blue-500/40",
+  purple: "bg-purple-500/40",
+  emerald: "bg-emerald-500/40",
+  orange: "bg-orange-500/40",
+  red: "bg-red-500/40",
+  green: "bg-green-500/40",
+  yellow: "bg-yellow-500/40",
+  pink: "bg-pink-500/40",
+  cyan: "bg-cyan-500/40",
+  indigo: "bg-indigo-500/40",
 };
 
 const DEFAULT_ACCENT = "primary";
@@ -99,8 +113,8 @@ export function GroupContainerNode({ id, data }: NodeProps) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      <Handle type="target" position={Position.Top} className={`!w-3 !h-3 !${accent.text.replace("text-", "bg-")}`} />
-      <Handle type="source" position={Position.Bottom} className={`!w-3 !h-3 !${accent.text.replace("text-", "bg-")}`} />
+      <Handle type="target" position={Position.Top} className={`!w-3 !h-3 ${accent.handleBg}`} />
+      <Handle type="source" position={Position.Bottom} className={`!w-3 !h-3 ${accent.handleBg}`} />
 
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
@@ -134,7 +148,7 @@ export function GroupContainerNode({ id, data }: NodeProps) {
                 </span>
               </div>
               {child.color && (
-                <div className={`h-0.5 w-full rounded-full mt-1 bg-${child.color}-500/40`} />
+                <div className={`h-0.5 w-full rounded-full mt-1 ${CHILD_COLOR_CLASSES[child.color] ?? "bg-white/20"}`} />
               )}
             </div>
           ))}

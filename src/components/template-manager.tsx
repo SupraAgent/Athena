@@ -83,11 +83,8 @@ export function TemplateManager({
       name: newName.trim(),
       description: newDesc.trim(),
       category: "custom",
-      nodes: currentNodes.map((n) => ({ ...n, data: { ...n.data } })),
-      edges: currentEdges.map((e) => ({
-        ...e,
-        ...(e.style ? { style: { ...e.style } } : {}),
-      })),
+      nodes: JSON.parse(JSON.stringify(currentNodes)),
+      edges: JSON.parse(JSON.stringify(currentEdges)),
       tags: newTags
         .split(",")
         .map((t) => t.trim())

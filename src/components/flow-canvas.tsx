@@ -107,6 +107,8 @@ function FlowCanvasInner({
   const [nodes, setNodes, onNodesChange] = useNodesState(autoLayout(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [selectedNode, setSelectedNode] = React.useState<Node | null>(null);
+  // Unique ID to scope group-add-child events to this canvas instance
+  const canvasId = React.useRef(`canvas-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
   const [contextMenu, setContextMenu] = React.useState<{
     nodeId: string;
     x: number;
@@ -125,18 +127,21 @@ function FlowCanvasInner({
     setEdgesDirectly
   );
 
-  // Listen for group container child additions
+  // Listen for group container child additions (scoped to this canvas instance)
   React.useEffect(() => {
+    const id = canvasId.current;
     function handleGroupAddChild(event: Event) {
-      const { nodeId, child } = (event as CustomEvent<{ nodeId: string; child: GroupContainerChild }>).detail;
+      const detail = (event as CustomEvent<{ canvasId?: string; nodeId: string; child: GroupContainerChild }>).detail;
+      // Only process events for this canvas instance
+      if (detail.canvasId && detail.canvasId !== id) return;
       setNodes((nds) =>
         nds.map((n) => {
-          if (n.id !== nodeId) return n;
+          if (n.id !== detail.nodeId) return n;
           const data = n.data as Record<string, unknown>;
           const existing = (data.children as GroupContainerChild[]) ?? [];
           return {
             ...n,
-            data: { ...data, children: [...existing, child] },
+            data: { ...data, children: [...existing, detail.child] },
           };
         })
       );
@@ -200,7 +205,17 @@ function FlowCanvasInner({
       const rawData = event.dataTransfer.getData("application/reactflow");
       if (!rawData) return;
 
-      const { nodeType, subType, label, defaultConfig } = JSON.parse(rawData);
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(rawData);
+      } catch {
+        return; // Ignore malformed drag data
+      }
+      if (typeof parsed.nodeType !== "string" || typeof parsed.label !== "string") return;
+      const nodeType = parsed.nodeType;
+      const subType = typeof parsed.subType === "string" ? parsed.subType : "";
+      const label = parsed.label;
+      const defaultConfig = (parsed.defaultConfig && typeof parsed.defaultConfig === "object" && !Array.isArray(parsed.defaultConfig)) ? parsed.defaultConfig as Record<string, unknown> : {};
 
       const bounds = reactFlowWrapper.current?.getBoundingClientRect();
       if (!bounds || !reactFlowInstance) return;

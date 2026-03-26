@@ -12,6 +12,39 @@
 
 import type { ManagedTemplate } from "../components/template-manager";
 
+/** Deep clone a template's nodes and edges to prevent shared references */
+function deepCloneTemplate(template: ManagedTemplate): ManagedTemplate {
+  return {
+    ...template,
+    nodes: JSON.parse(JSON.stringify(template.nodes)),
+    edges: JSON.parse(JSON.stringify(template.edges)),
+    tags: template.tags ? [...template.tags] : undefined,
+  };
+}
+
+/** Validate that an object has the minimum shape of a ManagedTemplate */
+function isValidTemplate(t: unknown): t is ManagedTemplate {
+  if (!t || typeof t !== "object") return false;
+  const obj = t as Record<string, unknown>;
+  return (
+    typeof obj.id === "string" && obj.id.length > 0 &&
+    typeof obj.name === "string" &&
+    Array.isArray(obj.nodes) &&
+    Array.isArray(obj.edges)
+  );
+}
+
+/** Safely write to localStorage with quota error handling */
+function safeSetItem(key: string, value: string): { ok: boolean; error?: string } {
+  try {
+    localStorage.setItem(key, value);
+    return { ok: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Storage quota exceeded";
+    return { ok: false, error: msg };
+  }
+}
+
 // ── Core CRUD ────────────────────────────────────────────────────
 
 export class TemplatePersistence {
@@ -28,14 +61,18 @@ export class TemplatePersistence {
     if (typeof window === "undefined") return [];
     try {
       const raw = localStorage.getItem(this.storageKey);
-      return raw ? JSON.parse(raw) : [];
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      // Filter out malformed entries
+      return parsed.filter(isValidTemplate);
     } catch {
       return [];
     }
   }
 
-  /** Save or update a custom template */
-  saveCustomTemplate(template: ManagedTemplate): void {
+  /** Save or update a custom template. Returns false if storage quota exceeded. */
+  saveCustomTemplate(template: ManagedTemplate): boolean {
     const existing = this.getCustomTemplates();
     const idx = existing.findIndex((t) => t.id === template.id);
     if (idx >= 0) {
@@ -43,13 +80,13 @@ export class TemplatePersistence {
     } else {
       existing.push(template);
     }
-    localStorage.setItem(this.storageKey, JSON.stringify(existing));
+    return safeSetItem(this.storageKey, JSON.stringify(existing)).ok;
   }
 
   /** Delete a custom template by ID */
   deleteCustomTemplate(id: string): void {
     const remaining = this.getCustomTemplates().filter((t) => t.id !== id);
-    localStorage.setItem(this.storageKey, JSON.stringify(remaining));
+    safeSetItem(this.storageKey, JSON.stringify(remaining));
   }
 
   /** Get all templates: built-in + custom */
@@ -92,17 +129,11 @@ export class TemplatePersistence {
 
     const nextSuffix = String(maxNum + 1).padStart(3, "0");
     const copy: ManagedTemplate = {
+      ...deepCloneTemplate(template),
       id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: `${cleanBase}_${nextSuffix}`,
-      description: template.description,
       category: "custom",
-      nodes: template.nodes.map((n) => ({ ...n, data: { ...n.data } })),
-      edges: template.edges.map((e) => ({
-        ...e,
-        ...(e.style ? { style: { ...e.style } } : {}),
-      })),
       isBuiltIn: false,
-      tags: template.tags ? [...template.tags] : undefined,
       createdAt: new Date().toISOString().split("T")[0],
     };
 
@@ -121,32 +152,35 @@ export class TemplatePersistence {
   }
 
   /** Import templates from JSON string (merges with existing, skips duplicates by ID) */
-  importJSON(json: string): { imported: number; skipped: number } {
-    let templates: ManagedTemplate[];
+  importJSON(json: string): { imported: number; skipped: number; error?: string } {
+    let parsed: unknown;
     try {
-      templates = JSON.parse(json);
+      parsed = JSON.parse(json);
     } catch {
-      return { imported: 0, skipped: 0 };
+      return { imported: 0, skipped: 0, error: "Invalid JSON" };
     }
 
-    if (!Array.isArray(templates)) return { imported: 0, skipped: 0 };
+    if (!Array.isArray(parsed)) return { imported: 0, skipped: 0, error: "Expected an array" };
 
     const existing = this.getCustomTemplates();
     const existingIds = new Set(existing.map((t) => t.id));
     let imported = 0;
     let skipped = 0;
 
-    for (const t of templates) {
-      if (!t.id || existingIds.has(t.id)) {
+    for (const t of parsed) {
+      if (!isValidTemplate(t) || existingIds.has(t.id)) {
         skipped++;
         continue;
       }
-      existing.push({ ...t, isBuiltIn: false });
+      existing.push({ ...deepCloneTemplate(t), isBuiltIn: false });
       existingIds.add(t.id);
       imported++;
     }
 
-    localStorage.setItem(this.storageKey, JSON.stringify(existing));
+    const result = safeSetItem(this.storageKey, JSON.stringify(existing));
+    if (!result.ok) {
+      return { imported: 0, skipped: 0, error: result.error };
+    }
     return { imported, skipped };
   }
 }

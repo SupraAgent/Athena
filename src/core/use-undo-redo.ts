@@ -19,15 +19,16 @@ export function useUndoRedo(
 ) {
   const past = React.useRef<Snapshot[]>([]);
   const future = React.useRef<Snapshot[]>([]);
-  const skipRecord = React.useRef(false);
+  // Counter instead of boolean — one skip per state setter call (setNodes + setEdges = 2)
+  const skipCount = React.useRef(0);
   const lastSnapshot = React.useRef<string>("");
-  // Version counter to force re-render when refs change
-  const [, setVersion] = React.useState(0);
+  // Version counter to force re-render when refs change (canUndo/canRedo derive from this)
+  const [version, setVersion] = React.useState(0);
 
   // Record snapshots when nodes/edges change (debounced by JSON comparison)
   React.useEffect(() => {
-    if (skipRecord.current) {
-      skipRecord.current = false;
+    if (skipCount.current > 0) {
+      skipCount.current--;
       return;
     }
     const snap = JSON.stringify({ nodes, edges });
@@ -44,15 +45,17 @@ export function useUndoRedo(
     lastSnapshot.current = snap;
   }, [nodes, edges]);
 
-  const canUndo = past.current.length > 0;
-  const canRedo = future.current.length > 0;
+  // Derive canUndo/canRedo from version to guarantee freshness after mutations
+  const canUndo = version >= 0 && past.current.length > 0;
+  const canRedo = version >= 0 && future.current.length > 0;
 
   const undo = React.useCallback(() => {
     const prev = past.current.pop();
     if (!prev) return;
     future.current.push(JSON.parse(lastSnapshot.current) as Snapshot);
     lastSnapshot.current = JSON.stringify(prev);
-    skipRecord.current = true;
+    // Skip 2 effect fires: one for setNodes, one for setEdges
+    skipCount.current = 2;
     setNodes(prev.nodes);
     setEdges(prev.edges);
     setVersion((v) => v + 1);
@@ -63,7 +66,7 @@ export function useUndoRedo(
     if (!next) return;
     past.current.push(JSON.parse(lastSnapshot.current) as Snapshot);
     lastSnapshot.current = JSON.stringify(next);
-    skipRecord.current = true;
+    skipCount.current = 2;
     setNodes(next.nodes);
     setEdges(next.edges);
     setVersion((v) => v + 1);

@@ -384,38 +384,52 @@ function AsyncSelectField({
   const [error, setError] = React.useState<string | null>(null);
   const [creating, setCreating] = React.useState(false);
   const [createName, setCreateName] = React.useState("");
+  // Store mapOption in a ref to avoid re-fetch on every render (functions break useEffect deps)
+  const mapOptionRef = React.useRef(field.mapOption);
+  mapOptionRef.current = field.mapOption;
 
-  React.useEffect(() => {
+  const fetchOptions = React.useCallback(() => {
     if (!field.optionsUrl) return;
+    // Only allow relative URLs to prevent SSRF
+    if (field.optionsUrl.startsWith("http://") || field.optionsUrl.startsWith("https://") || field.optionsUrl.startsWith("//")) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    fetch(field.optionsUrl)
+    fetch(field.optionsUrl, { credentials: "same-origin" })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then((data: unknown) => {
         if (cancelled) return;
-        const items = Array.isArray(data) ? data : [];
-        const mapped = field.mapOption
-          ? items.map((item: Record<string, unknown>) => field.mapOption!(item))
+        // Handle both bare arrays and { data: [...] } wrapper patterns
+        const items = Array.isArray(data) ? data : (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>).data)) ? (data as Record<string, unknown>).data as unknown[] : [];
+        const mapper = mapOptionRef.current;
+        const mapped = mapper
+          ? items.map((item: unknown) => mapper(item as Record<string, unknown>))
           : items as { value: string; label: string }[];
         setOptions(mapped);
       })
       .catch((err: Error) => {
-        if (!cancelled) setError(err.message);
+        if (!cancelled) setError(err.message?.slice(0, 200) ?? "Failed to load");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
 
     return () => { cancelled = true; };
-  }, [field.optionsUrl, field.mapOption]);
+  }, [field.optionsUrl]);
+
+  React.useEffect(() => {
+    const cleanup = fetchOptions();
+    return cleanup;
+  }, [fetchOptions]);
 
   const handleCreate = () => {
     if (!field.createUrl || !createName.trim()) return;
+    // Only allow relative URLs to prevent SSRF
+    if (field.createUrl.startsWith("http://") || field.createUrl.startsWith("https://") || field.createUrl.startsWith("//")) return;
     const body: Record<string, string> = {};
     if (field.createFields) {
       body[field.createFields.labelKey] = createName.trim();
@@ -427,15 +441,21 @@ function AsyncSelectField({
     fetch(field.createUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify(body),
     })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then((created: Record<string, unknown>) => {
-        const newOpt = field.mapOption
-          ? field.mapOption(created)
+      .then((rawCreated: unknown) => {
+        // Handle { data: {...} } wrapper
+        const created = (rawCreated && typeof rawCreated === "object" && !Array.isArray(rawCreated) && "data" in (rawCreated as Record<string, unknown>) && typeof (rawCreated as Record<string, unknown>).data === "object")
+          ? (rawCreated as Record<string, unknown>).data as Record<string, unknown>
+          : rawCreated as Record<string, unknown>;
+        const mapper = mapOptionRef.current;
+        const newOpt = mapper
+          ? mapper(created)
           : {
               value: String(field.createFields ? created[field.createFields.valueKey] : created.id ?? created.value),
               label: String(field.createFields ? created[field.createFields.labelKey] : created.name ?? created.label),
@@ -445,7 +465,7 @@ function AsyncSelectField({
         setCreateName("");
       })
       .catch((err: Error) => {
-        setError(err.message);
+        setError(err.message?.slice(0, 200) ?? "Failed to create");
       })
       .finally(() => {
         setCreating(false);
@@ -457,7 +477,10 @@ function AsyncSelectField({
       {loading ? (
         <div className="text-[10px] text-muted-foreground py-1.5">Loading options…</div>
       ) : error ? (
-        <div className="text-[10px] text-red-400 py-1.5">Failed to load: {error}</div>
+        <div className="text-[10px] text-red-400 py-1.5 flex items-center gap-2">
+          <span>Failed to load: {error}</span>
+          <button type="button" onClick={fetchOptions} className="text-blue-400 hover:text-blue-300 underline">Retry</button>
+        </div>
       ) : (
         <select
           value={value}
