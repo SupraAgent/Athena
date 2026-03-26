@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { CanvasIdContext } from "../canvas-id-context";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ export function GroupContainerNode({ id, data }: NodeProps) {
   const acceptType = d.acceptType ?? "application/reactflow-group-item";
   const maxChildren = d.maxChildren ?? 0;
   const atCapacity = maxChildren > 0 && children.length >= maxChildren;
+  const canvasId = React.useContext(CanvasIdContext);
 
   const [dragOver, setDragOver] = React.useState(false);
 
@@ -95,8 +97,8 @@ export function GroupContainerNode({ id, data }: NodeProps) {
       // Dedupe by id
       if (itemData.id && children.some((c) => c.id === itemData.id)) return;
 
-      // Dispatch custom event so FlowCanvas can update node data
-      const detail = { nodeId: id, child: itemData };
+      // Dispatch custom event so FlowCanvas can update node data (scoped by canvasId)
+      const detail = { canvasId, nodeId: id, child: itemData };
       window.dispatchEvent(new CustomEvent("supra:group-add-child", { detail }));
     } catch {
       // Ignore parse errors

@@ -41,6 +41,7 @@ import { autoLayout } from "../core/auto-layout";
 import { computeSmartDefaults, detectUpstreamFromEdges, type SmartDefaultRule } from "../core/smart-defaults";
 import { useUndoRedo } from "../core/use-undo-redo";
 import { NodeContextMenu } from "./node-context-menu";
+import { CanvasIdContext } from "./canvas-id-context";
 
 const nodeTypes: NodeTypes = {
   trigger: TriggerNode,
@@ -370,6 +371,7 @@ function FlowCanvasInner({
   }, []);
 
   return (
+    <CanvasIdContext.Provider value={canvasId.current}>
     <div className="flex h-full">
       {!hideSidebar && <NodeSidebar />}
 
@@ -482,6 +484,7 @@ function FlowCanvasInner({
         )}
       </div>
     </div>
+    </CanvasIdContext.Provider>
   );
 }
 
