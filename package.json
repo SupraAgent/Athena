@@ -16,7 +16,8 @@
   },
   "files": [
     "dist",
-    "tailwind.config.ts"
+    "tailwind.config.ts",
+    "INTEGRATION.md"
   ],
   "scripts": {
     "build": "tsup",
