@@ -1,0 +1,54 @@
+name: Sync Builder Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/builder/**'
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - repo: SupraAgent/supracrm
+            path: packages/builder
+          # Add more repos here as needed:
+          # - repo: SupraAgent/SupraOS
+          #   path: packages/builder
+
+    steps:
+      - name: Checkout Athena
+        uses: actions/checkout@v4
+        with:
+          path: athena
+
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.target.repo }}
+          token: ${{ secrets.SYNC_TOKEN }}
+          path: target
+
+      - name: Sync builder package
+        run: |
+          rsync -av --delete \
+            --exclude node_modules \
+            --exclude dist \
+            --exclude .turbo \
+            athena/packages/builder/ target/${{ matrix.target.path }}/
+
+      - name: Commit and push
+        working-directory: target
+        run: |
+          git config user.name "Athena Sync Bot"
+          git config user.email "athena-sync@supraagent.dev"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes to sync"
+            exit 0
+          fi
+          COMMIT_SHA=$(cd ../athena && git rev-parse --short HEAD)
+          git commit -m "chore: sync @supra/builder from Athena@${COMMIT_SHA}"
+          git push

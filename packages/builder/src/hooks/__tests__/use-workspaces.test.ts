@@ -66,25 +66,27 @@ describe("workspace CRUD", () => {
     const nodes = [node("a")];
     const edges: Edge[] = [];
     const ws = createWorkspace("My Flow", nodes, edges);
+    expect(ws).not.toBeNull();
 
-    expect(ws.name).toBe("My Flow");
-    expect(ws.id).toMatch(/^ws-/);
-    expect(ws.nodes).toEqual(nodes);
+    expect(ws!.name).toBe("My Flow");
+    expect(ws!.id).toMatch(/^ws-/);
+    expect(ws!.nodes).toEqual(nodes);
 
     const all = getWorkspaces();
     expect(all).toHaveLength(1);
-    expect(all[0].id).toBe(ws.id);
+    expect(all[0].id).toBe(ws!.id);
   });
 
   it("saveWorkspace updates an existing workspace", () => {
     const ws = createWorkspace("Test", [node("a")], []);
+    expect(ws).not.toBeNull();
     const newNodes = [node("a"), node("b")];
     const newEdges = [edge("a", "b")];
 
-    const ok = saveWorkspace(ws.id, newNodes, newEdges);
+    const ok = saveWorkspace(ws!.id, newNodes, newEdges);
 
     expect(ok).toBe(true);
-    const loaded = getWorkspaces().find((w) => w.id === ws.id);
+    const loaded = getWorkspaces().find((w) => w.id === ws!.id);
     expect(loaded!.nodes).toHaveLength(2);
     expect(loaded!.edges).toHaveLength(1);
   });
@@ -100,9 +102,10 @@ describe("workspace CRUD", () => {
 
   it("deleteWorkspace removes workspace and clears active ID if matching", () => {
     const ws = createWorkspace("ToDelete", [node("a")], []);
-    setActiveWorkspaceId(ws.id);
+    expect(ws).not.toBeNull();
+    setActiveWorkspaceId(ws!.id);
 
-    deleteWorkspace(ws.id);
+    deleteWorkspace(ws!.id);
 
     expect(getWorkspaces()).toHaveLength(0);
     expect(getActiveWorkspaceId()).toBeNull();
@@ -110,12 +113,13 @@ describe("workspace CRUD", () => {
 
   it("duplicateWorkspace creates a copy with (copy) suffix", () => {
     const ws = createWorkspace("Original", [node("a"), node("b")], [edge("a", "b")]);
+    expect(ws).not.toBeNull();
 
-    const copy = duplicateWorkspace(ws.id);
+    const copy = duplicateWorkspace(ws!.id);
 
     expect(copy).not.toBeNull();
     expect(copy!.name).toBe("Original (copy)");
-    expect(copy!.id).not.toBe(ws.id);
+    expect(copy!.id).not.toBe(ws!.id);
     expect(copy!.nodes).toHaveLength(2);
     expect(getWorkspaces()).toHaveLength(2);
   });
@@ -126,9 +130,10 @@ describe("workspace CRUD", () => {
 
   it("renameWorkspace updates the name", () => {
     const ws = createWorkspace("Old Name", [], []);
-    renameWorkspace(ws.id, "New Name");
+    expect(ws).not.toBeNull();
+    renameWorkspace(ws!.id, "New Name");
 
-    const loaded = loadWorkspace(ws.id);
+    const loaded = loadWorkspace(ws!.id);
     expect(loaded!.name).toBe("New Name");
   });
 

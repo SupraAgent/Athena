@@ -16,8 +16,8 @@ A 5-step loop that makes any app competitive with industry leaders:
 ### Builder (Workflow Automation)
 A self-contained drag-and-drop workflow builder in `packages/builder/`. Used across multiple Supra apps.
 
-### Hermes (Planned)
-Session memory and context relay module — persistent memory across Claude Code sessions.
+### Hermes (Session Memory)
+`packages/hermes/` (`@supra/hermes`) — persistent memory across Claude Code sessions. Uses `.athena/hermes/` for file-based storage (memories, sessions, config). Integrates via Claude Code hooks (SessionStart, Stop).
 
 ## Architecture
 
@@ -38,6 +38,7 @@ Session memory and context relay module — persistent memory across Claude Code
 | `src/components/shell/` | Layout shell and sidebar |
 | `src/lib/supabase/` | Auth and session management |
 | `packages/builder/` | Self-contained workflow builder (ReactFlow-based) |
+| `packages/hermes/` | Session memory & context relay (Claude Code hooks) |
 
 ## Tech Stack
 
