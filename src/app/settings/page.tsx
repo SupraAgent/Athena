@@ -73,7 +73,7 @@ function ApiKeysTab() {
   const [saved, setSaved] = React.useState(false);
 
   React.useEffect(() => {
-    const stored = localStorage.getItem("supraloop_anthropic_key");
+    const stored = localStorage.getItem("athena_anthropic_key");
     if (stored) {
       setApiKey(stored);
       setSaved(true);
@@ -82,13 +82,13 @@ function ApiKeysTab() {
 
   function handleSave() {
     if (apiKey.trim()) {
-      localStorage.setItem("supraloop_anthropic_key", apiKey.trim());
+      localStorage.setItem("athena_anthropic_key", apiKey.trim());
       setSaved(true);
     }
   }
 
   function handleClear() {
-    localStorage.removeItem("supraloop_anthropic_key");
+    localStorage.removeItem("athena_anthropic_key");
     setApiKey("");
     setSaved(false);
   }
@@ -128,7 +128,7 @@ function ApiKeysTab() {
       {saved && (
         <div className="rounded-xl border border-green-500/20 bg-green-500/5 px-4 py-3">
           <p className="text-sm text-green-400">
-            API key saved. SupraLoop will use Claude for real CPO scoring and
+            API key saved. Athena will use Claude for real CPO scoring and
             improvement analysis.
           </p>
         </div>

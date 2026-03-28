@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "SupraLoop Builder",
+  title: "Athena Builder",
   description: "Visual automation builder — drag, connect, and orchestrate workflows with AI",
 };
 

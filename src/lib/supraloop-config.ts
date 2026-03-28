@@ -58,7 +58,7 @@ function buildConfigYaml(draft: ImprovementDraft): string {
     .join("\n\n");
 
   return [
-    generatedHeader("SupraLoop Configuration"),
+    generatedHeader("Athena Configuration"),
     "",
     "app:",
     `  name: ${yamlStr(app.name)}`,
@@ -102,7 +102,7 @@ function buildBenchmarksYaml(draft: ImprovementDraft): string {
 
   if (referenceApps.length === 0) {
     return [
-      generatedHeader("SupraLoop Benchmarks"),
+      generatedHeader("Athena Benchmarks"),
       "",
       "# No reference apps recorded yet.",
       "reference_apps: []\n",
@@ -125,7 +125,7 @@ function buildBenchmarksYaml(draft: ImprovementDraft): string {
     .join("\n\n");
 
   return [
-    generatedHeader("SupraLoop Benchmarks"),
+    generatedHeader("Athena Benchmarks"),
     "",
     "reference_apps:",
     appsBlock,
@@ -182,7 +182,7 @@ function buildScoresYaml(draft: ImprovementDraft): string {
   const consensusBlock = buildCategoryScoresBlock(consensusScores, 2);
 
   return [
-    generatedHeader("SupraLoop Scores"),
+    generatedHeader("Athena Scores"),
     "",
     `target_score: ${targetScore}`,
     "",
@@ -207,7 +207,7 @@ function buildRoundYaml(round: Round): string {
     .join("\n");
 
   return [
-    generatedHeader(`SupraLoop Round ${pad(round.number, 3)}`),
+    generatedHeader(`Athena Round ${pad(round.number, 3)}`),
     "",
     `round: ${round.number}`,
     `decision: ${yamlStr(round.decision)}`,
@@ -259,10 +259,10 @@ function buildCPOYaml(appName: string, cpo: CPOPersona): string {
 // ── Public API ───────────────────────────────────────────────────────
 
 /**
- * Generates all files for the .supraloop/ directory from an ImprovementDraft.
+ * Generates all files for the .athena/ directory from an ImprovementDraft.
  * Returns an array of { path, content } objects ready to be written to disk.
  */
-export function generateSupraLoopFiles(
+export function generateAthenaFiles(
   draft: ImprovementDraft,
   appName: string
 ): { path: string; content: string }[] {
@@ -270,26 +270,26 @@ export function generateSupraLoopFiles(
 
   // config.yaml
   files.push({
-    path: ".supraloop/config.yaml",
+    path: ".athena/config.yaml",
     content: buildConfigYaml(draft),
   });
 
   // benchmarks.yaml
   files.push({
-    path: ".supraloop/benchmarks.yaml",
+    path: ".athena/benchmarks.yaml",
     content: buildBenchmarksYaml(draft),
   });
 
   // scores.yaml
   files.push({
-    path: ".supraloop/scores.yaml",
+    path: ".athena/scores.yaml",
     content: buildScoresYaml(draft),
   });
 
   // rounds/round-NNN.yaml — one file per completed round
   for (const round of draft.rounds) {
     files.push({
-      path: `.supraloop/rounds/round-${pad(round.number, 3)}.yaml`,
+      path: `.athena/rounds/round-${pad(round.number, 3)}.yaml`,
       content: buildRoundYaml(round),
     });
   }
@@ -299,7 +299,7 @@ export function generateSupraLoopFiles(
     if (refApp.cpo) {
       const slug = slugify(refApp.name);
       files.push({
-        path: `.supraloop/cpos/${slug}.yaml`,
+        path: `.athena/cpos/${slug}.yaml`,
         content: buildCPOYaml(refApp.name, refApp.cpo),
       });
     }
@@ -318,7 +318,7 @@ export function generateCommitMessage(draft: ImprovementDraft): string {
   const appLabel = app.name || "app";
 
   if (rounds.length === 0) {
-    return `chore(supraloop): initialise .supraloop/ for ${appLabel}\n\nScore baseline: ${overall}/${targetScore} target. No improvement rounds yet.`;
+    return `chore(athena): initialise .athena/ for ${appLabel}\n\nScore baseline: ${overall}/${targetScore} target. No improvement rounds yet.`;
   }
 
   const lastRound = rounds[rounds.length - 1];
@@ -335,7 +335,7 @@ export function generateCommitMessage(draft: ImprovementDraft): string {
       : `${lastRound.overallBefore} → ${lastRound.overallAfter}`;
 
   const summary =
-    `improve(supraloop): round ${lastRound.number} — ${lastRound.categoryAffected}\n\n` +
+    `improve(athena): round ${lastRound.number} — ${lastRound.categoryAffected}\n\n` +
     `App: ${appLabel}\n` +
     `Decision: ${lastRound.decision}\n` +
     `Proposed by: ${lastRound.proposedByRole} | Vote: ${lastRound.vote}\n` +

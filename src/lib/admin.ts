@@ -1,5 +1,5 @@
 /**
- * Admin types and role-based access control for SupraLoop.
+ * Admin types and role-based access control for Athena.
  *
  * Role hierarchy (highest → lowest):
  *   owner  — Full control, can manage all admins, only one per instance

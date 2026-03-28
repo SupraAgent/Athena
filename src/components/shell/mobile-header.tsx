@@ -18,7 +18,7 @@ export function MobileHeader() {
         <div className="flex items-center gap-2">
           <div className="h-2.5 w-2.5 rounded-full bg-primary" />
           <span className="text-sm font-semibold text-foreground tracking-tight">
-            SupraLoop
+            Athena
           </span>
         </div>
         <div className="flex items-center gap-1">

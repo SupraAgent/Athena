@@ -103,10 +103,10 @@ export default function BuilderPage() {
   return (
     <WorkflowBuilder
       category="workflow"
-      storageKeyPrefix="supraloop"
+      storageKeyPrefix="athena"
       onChat={handleChat}
       onLLMExecute={handleLLMExecute}
-      title="SupraLoop Builder"
+      title="Athena Builder"
       subtitle="Build, connect, and orchestrate automation workflows"
       showAIChat
       className="h-full"

@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth";
 
-const STORAGE_KEY = "supraloop_selected_repo";
+const STORAGE_KEY = "athena_selected_repo";
 
 type Repo = {
   id: number;
@@ -130,7 +130,7 @@ export default function ReposPage() {
       <div className="mx-auto max-w-2xl px-4 py-8">
         <h1 className="text-2xl font-bold text-foreground">GitHub Repos</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Connect a repository to store your SupraLoop config, scores, and round
+          Connect a repository to store your Athena config, scores, and round
           logs directly in your codebase.
         </p>
 
@@ -140,7 +140,7 @@ export default function ReposPage() {
             Sign in to connect a repository
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            SupraLoop needs your GitHub identity to list and connect repos.
+            Athena needs your GitHub identity to list and connect repos.
           </p>
           <div className="mt-5">
             <Link
@@ -163,7 +163,7 @@ export default function ReposPage() {
     <div className="mx-auto max-w-2xl px-4 py-8">
       <h1 className="text-2xl font-bold text-foreground">GitHub Repos</h1>
       <p className="mt-1 text-sm text-muted-foreground">
-        Connect a repository to store your SupraLoop config, scores, and round
+        Connect a repository to store your Athena config, scores, and round
         logs directly in your codebase.
       </p>
 
@@ -250,7 +250,7 @@ export default function ReposPage() {
           <div className="mt-4 flex items-center gap-2">
             <div className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(12,206,107,0.6)]" />
             <p className="text-xs text-muted-foreground">
-              Repo connected. SupraLoop will read and write to{" "}
+              Repo connected. Athena will read and write to{" "}
               <code className="text-primary">.supraloop/</code> on your{" "}
               <code className="text-primary">{selected.default_branch}</code> branch.
             </p>
@@ -275,7 +275,7 @@ export default function ReposPage() {
             No repository connected
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            SupraLoop will commit a{" "}
+            Athena will commit a{" "}
             <code className="text-primary">.supraloop/</code> directory to your
             repo with config, benchmarks, scores, and round logs.
           </p>

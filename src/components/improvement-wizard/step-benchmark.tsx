@@ -89,7 +89,7 @@ export function StepBenchmark({ draft, onChange }: Props) {
   const [generatingCPO, setGeneratingCPO] = React.useState<number | null>(null);
   const [scoringWithAI, setScoringWithAI] = React.useState<number | null>(null);
   const tabRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
-  const hasApiKey = typeof window !== "undefined" && !!localStorage.getItem("supraloop_anthropic_key");
+  const hasApiKey = typeof window !== "undefined" && !!localStorage.getItem("athena_anthropic_key");
 
   // Backfill slots if loaded from old localStorage format (EMPTY_DRAFT now provides 3)
   React.useEffect(() => {
@@ -121,7 +121,7 @@ export function StepBenchmark({ draft, onChange }: Props) {
     const app = draft.referenceApps[appIndex];
     if (!app?.name) return;
 
-    const apiKey = localStorage.getItem("supraloop_anthropic_key");
+    const apiKey = localStorage.getItem("athena_anthropic_key");
     if (!apiKey) {
       // Fallback to deterministic generation
       const cpo = generateCPO(app);
@@ -146,7 +146,7 @@ export function StepBenchmark({ draft, onChange }: Props) {
   async function handleAIScore(appIndex: number) {
     const app = draft.referenceApps[appIndex];
     if (!app?.name) return;
-    const apiKey = localStorage.getItem("supraloop_anthropic_key");
+    const apiKey = localStorage.getItem("athena_anthropic_key");
     if (!apiKey) return;
 
     setScoringWithAI(appIndex);

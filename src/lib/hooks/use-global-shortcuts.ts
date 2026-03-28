@@ -9,7 +9,7 @@ type ShortcutHandlers = {
 };
 
 /**
- * Global keyboard shortcut system for SupraCRM.
+ * Global keyboard shortcut system for Athena.
  *
  * Single-key shortcuts:
  *   /         Open command palette (focus search)

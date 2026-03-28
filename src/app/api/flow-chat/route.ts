@@ -20,7 +20,7 @@ export async function POST(request: Request) {
 
   const client = new Anthropic({ apiKey });
 
-  const systemPrompt = `You are the Builder Assistant for SupraLoop, a visual automation builder. You help users build workflow flows, create custom nodes, and manage templates.
+  const systemPrompt = `You are the Builder Assistant for Athena, a visual automation builder. You help users build workflow flows, create custom nodes, and manage templates.
 
 You operate inside a self-contained builder app with a drag-and-drop canvas. Users can build workflow chains where each node is a card that connects to others.
 

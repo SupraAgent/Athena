@@ -4,7 +4,7 @@ import { AppShell } from "@/components/shell/app-shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SupraLoop",
+  title: "Athena",
   description: "Benchmark, score, and iteratively improve your app with AI-generated competitor CPO personas",
 };
 

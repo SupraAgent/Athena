@@ -58,7 +58,7 @@ function LoginForm() {
             <div className="h-4 w-4 rounded-full bg-primary shadow-[0_0_20px_rgba(12,206,107,0.5)]" />
           </div>
           <h1 className="mt-4 text-xl font-semibold text-foreground">
-            SupraLoop
+            Athena
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             Benchmark, score, and iteratively improve your app

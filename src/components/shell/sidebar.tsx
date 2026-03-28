@@ -18,7 +18,7 @@ export function Sidebar() {
         <div className="flex items-center gap-2.5">
           <div className="h-2.5 w-2.5 rounded-full bg-primary" />
           <span className="text-foreground font-semibold text-sm tracking-tight">
-            SupraLoop
+            Athena
           </span>
         </div>
         <p className="mt-1 text-[10px] text-muted-foreground pl-5">

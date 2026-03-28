@@ -100,7 +100,7 @@ export function SetupChecklist({ hasBotToken, hasGroups, hasDeals, hasContacts, 
                 <Rocket className="h-6 w-6 text-primary" />
               </div>
               <div>
-                <h2 className="text-lg font-semibold text-foreground">Welcome to SupraCRM</h2>
+                <h2 className="text-lg font-semibold text-foreground">Welcome to Athena</h2>
                 <p className="text-xs text-muted-foreground">Telegram-native CRM for your team</p>
               </div>
             </div>
@@ -151,7 +151,7 @@ export function SetupChecklist({ hasBotToken, hasGroups, hasDeals, hasContacts, 
     <div className="rounded-2xl border border-primary/20 bg-primary/[0.03] overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-primary/10">
         <div>
-          <h2 className="text-sm font-medium text-foreground">Get Started with SupraCRM</h2>
+          <h2 className="text-sm font-medium text-foreground">Get Started with Athena</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
             {completedCount}/{items.length} steps completed
           </p>

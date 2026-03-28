@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAuth } from "@/lib/auth-guard";
 
 /**
- * POST: Global AI assistant chat for SupraLoop.
+ * POST: Global AI assistant chat for Athena.
  * Context-aware — knows the current page.
  */
 export async function POST(request: Request) {
@@ -81,11 +81,11 @@ function buildSystemPrompt(context?: {
 }): string {
   const page = context?.page ?? "/";
 
-  let prompt = `You are SupraLoop AI, a helpful assistant for a recursive improvement engine.
+  let prompt = `You are Athena AI, a helpful assistant for a recursive improvement engine.
 You help users benchmark apps against competitors, create AI-generated CPO personas, build visual workflows, and ship improvements.
 Be concise and direct. Use short paragraphs.
 
-SupraLoop features:
+Athena features:
 - Workflow Builder: Visual drag-and-drop workflow builder with 13 node types (personas, apps, competitors, LLM, triggers, conditions, transforms, outputs)
 - Improvement Loop: Recursive benchmarking engine — score apps against competitors using AI CPO personas
 - Persona Studio: Create and customize AI CPO personas for product evaluation
@@ -137,7 +137,7 @@ You are helping the user create AI CPO personas. You can help with:
     prompt += `
 
 CURRENT PAGE: Settings
-You are helping the user configure SupraLoop. You can help with:
+You are helping the user configure Athena. You can help with:
 - API key configuration
 - GitHub integration setup
 - Understanding available settings`;

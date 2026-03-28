@@ -13,7 +13,7 @@ import {
   type Round,
 } from "@/lib/improvement";
 import {
-  generateSupraLoopFiles,
+  generateAthenaFiles,
   generateCommitMessage,
 } from "@/lib/supraloop-config";
 import { LoadingProgress } from "@/components/ui/loading-progress";
@@ -112,7 +112,7 @@ export function StepImprove({ draft, onChange, onGenerateWorkflow }: Props) {
     runningRef.current = true;
     setRunning(true);
 
-    const apiKey = localStorage.getItem("supraloop_anthropic_key");
+    const apiKey = localStorage.getItem("athena_anthropic_key");
 
     // Find highest-gap category
     const sorted = [...draft.gapAnalysis].sort((a, b) => b.gap - a.gap);
@@ -169,7 +169,7 @@ export function StepImprove({ draft, onChange, onGenerateWorkflow }: Props) {
   }
 
   async function saveToGitHub() {
-    const stored = localStorage.getItem("supraloop_selected_repo");
+    const stored = localStorage.getItem("athena_selected_repo");
     if (!stored) {
       setCommitResult({
         success: false,
@@ -190,7 +190,7 @@ export function StepImprove({ draft, onChange, onGenerateWorkflow }: Props) {
     setCommitting(true);
     setCommitResult(null);
 
-    const files = generateSupraLoopFiles(draft, draft.app.name);
+    const files = generateAthenaFiles(draft, draft.app.name);
     const message = generateCommitMessage(draft);
 
     try {

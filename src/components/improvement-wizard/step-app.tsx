@@ -44,7 +44,7 @@ export function StepApp({ draft, onChange }: Props) {
           <Input
             value={draft.app.name}
             onChange={(e) => patchApp({ name: e.target.value })}
-            placeholder="e.g. SupraCRM"
+            placeholder="e.g. MyApp"
           />
         </div>
 

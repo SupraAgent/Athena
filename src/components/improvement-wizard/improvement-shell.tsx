@@ -26,8 +26,8 @@ const STEPS = [
 
 type ViewMode = "form" | "canvas";
 
-const DRAFT_STORAGE_KEY = "supraloop_draft";
-const STEP_STORAGE_KEY = "supraloop_step";
+const DRAFT_STORAGE_KEY = "athena_draft";
+const STEP_STORAGE_KEY = "athena_step";
 
 function loadSavedDraft(): ImprovementDraft | null {
   try {
