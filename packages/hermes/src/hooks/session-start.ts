@@ -34,7 +34,7 @@ export async function onSessionStart(
   sessionId: string,
   repoRoot?: string
 ): Promise<HookOutput> {
-  const root = repoRoot ?? await findRepoRoot();
+  const root = repoRoot ?? findRepoRoot();
   const hermesDir = getHermesDir(root);
   const config = await loadConfig(hermesDir);
 

@@ -10,10 +10,14 @@ export function getHermesDir(repoRoot: string): string {
 }
 
 /** Discover repo root via `git rev-parse --show-toplevel`, fallback to cwd. */
-export async function findRepoRoot(): Promise<string> {
+export function findRepoRoot(): string {
   try {
-    const { execSync } = await import("child_process");
-    return execSync("git rev-parse --show-toplevel", { encoding: "utf-8" }).trim();
+    const { execFileSync } = require("child_process") as typeof import("child_process");
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
   } catch {
     return process.cwd();
   }

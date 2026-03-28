@@ -58,6 +58,8 @@ export type HookInput = {
   toolName?: string;
   /** For stop: session transcript summary. */
   transcript?: string;
+  /** For stop: when the session started (ISO timestamp). */
+  startedAt?: string;
 };
 
 /** Output returned from hooks to Claude Code via stdout. */

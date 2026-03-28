@@ -18,6 +18,17 @@ export function sessionId(): string {
   return `ses_${ts}_${rand}`;
 }
 
+// ── ID validation ───────────────────────────────────────────────
+
+const SAFE_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
+/** Validate that an ID is safe for use in file paths. */
+function assertSafeId(id: string): void {
+  if (!id || !SAFE_ID_PATTERN.test(id)) {
+    throw new Error(`Unsafe ID rejected: "${id}". IDs must match ${SAFE_ID_PATTERN}`);
+  }
+}
+
 // ── Paths ───────────────────────────────────────────────────────
 
 function memoriesDir(hermesDir: string): string {
@@ -29,6 +40,7 @@ function sessionsDir(hermesDir: string): string {
 }
 
 function memoryFilePath(hermesDir: string, id: string): string {
+  assertSafeId(id);
   return path.join(memoriesDir(hermesDir), `${id}.yaml`);
 }
 
@@ -48,10 +60,14 @@ function memoryToYaml(m: Memory): string {
   return `# Hermes Memory — ${m.type}\n${YAML.stringify(doc)}`;
 }
 
+const VALID_MEMORY_TYPES = new Set<string>(["fact", "decision", "session-summary"]);
+
 function yamlToMemory(raw: string): Memory | null {
   try {
     const parsed = YAML.parse(raw);
     if (!parsed?.id || !parsed?.type || !parsed?.content) return null;
+    if (!SAFE_ID_PATTERN.test(parsed.id)) return null;
+    if (!VALID_MEMORY_TYPES.has(parsed.type)) return null;
     return {
       id: parsed.id,
       type: parsed.type as MemoryType,
@@ -82,19 +98,23 @@ function sessionToYaml(s: SessionSummary): string {
 
 // ── CRUD ────────────────────────────────────────────────────────
 
-/** Load all memories from .athena/hermes/memories/ */
+/** Load all memories from .athena/hermes/memories/. Reads sequentially to avoid EMFILE. */
 export async function loadMemories(hermesDir: string): Promise<Memory[]> {
   const dir = memoriesDir(hermesDir);
   try {
     const files = await fs.readdir(dir);
     const yamlFiles = files.filter((f) => f.endsWith(".yaml"));
-    const results = await Promise.all(
-      yamlFiles.map(async (f) => {
+    const memories: Memory[] = [];
+    for (const f of yamlFiles) {
+      try {
         const raw = await fs.readFile(path.join(dir, f), "utf-8");
-        return yamlToMemory(raw);
-      })
-    );
-    return results.filter((m): m is Memory => m !== null);
+        const mem = yamlToMemory(raw);
+        if (mem) memories.push(mem);
+      } catch {
+        // Skip unreadable files, continue loading others
+      }
+    }
+    return memories;
   } catch {
     return [];
   }
@@ -146,14 +166,27 @@ export async function saveSessionSummary(
   hermesDir: string,
   summary: SessionSummary
 ): Promise<void> {
+  assertSafeId(summary.sessionId);
   const dir = sessionsDir(hermesDir);
   await fs.mkdir(dir, { recursive: true });
-  const date = summary.endedAt.slice(0, 10);
-  const filename = `${date}-${summary.sessionId}.yaml`;
+  // Validate endedAt is a plausible ISO date, fallback to today
+  const dateStr = /^\d{4}-\d{2}-\d{2}/.test(summary.endedAt)
+    ? summary.endedAt.slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  const filename = `${dateStr}-${summary.sessionId}.yaml`;
   await fs.writeFile(path.join(dir, filename), sessionToYaml(summary), "utf-8");
 }
 
 // ── Search ──────────────────────────────────────────────────────
+
+const STOP_WORDS = new Set([
+  "a", "an", "the", "is", "it", "in", "on", "at", "to", "of", "for",
+  "and", "or", "but", "not", "with", "from", "by", "as", "be", "was",
+  "are", "been", "has", "had", "have", "do", "does", "did", "will",
+  "can", "could", "would", "should", "may", "might", "i", "me", "my",
+  "we", "our", "you", "your", "he", "she", "they", "this", "that",
+  "how", "what", "when", "where", "who", "which", "why",
+]);
 
 /** Simple keyword + tag search. Returns matches sorted by relevance. */
 export function searchMemories(
@@ -161,8 +194,9 @@ export function searchMemories(
   query: string,
   limit = 10
 ): Memory[] {
-  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return memories.slice(0, limit);
+  const terms = query.toLowerCase().split(/\s+/)
+    .filter((t) => t.length >= 3 && !STOP_WORDS.has(t));
+  if (terms.length === 0) return [];
 
   const scored = memories.map((m) => {
     const text = `${m.content} ${m.tags.join(" ")}`.toLowerCase();

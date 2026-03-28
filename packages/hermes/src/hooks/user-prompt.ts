@@ -12,7 +12,7 @@ export async function onUserPrompt(
     return { context: "" };
   }
 
-  const root = repoRoot ?? await findRepoRoot();
+  const root = repoRoot ?? findRepoRoot();
   const hermesDir = getHermesDir(root);
   const config = await loadConfig(hermesDir);
   const allMemories = await loadMemories(hermesDir);

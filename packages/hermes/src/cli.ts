@@ -19,6 +19,9 @@ import { onUserPrompt } from "./hooks/user-prompt";
 import { sessionId } from "./memory-store";
 import type { HookInput, HookOutput } from "./types";
 
+// Record process start time for stop hook fallback
+const PROCESS_START = new Date().toISOString();
+
 async function readStdin(): Promise<string> {
   // If stdin is a TTY (no piped input), return empty
   if (process.stdin.isTTY) return "{}";
@@ -60,7 +63,7 @@ async function main(): Promise<void> {
       output = await onStop(
         sid,
         input.transcript ?? "",
-        input.prompt ?? new Date().toISOString()
+        input.startedAt ?? PROCESS_START
       );
       break;
 

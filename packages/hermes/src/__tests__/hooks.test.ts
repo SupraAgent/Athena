@@ -6,7 +6,7 @@ import { createMemory } from "../memory-store";
 import { saveConfig } from "../config";
 import { onSessionStart } from "../hooks/session-start";
 import { onStop } from "../hooks/stop";
-import { onPreToolUse } from "../hooks/pre-tool-use";
+import { onPreToolUse, _resetCache } from "../hooks/pre-tool-use";
 import { onUserPrompt } from "../hooks/user-prompt";
 import type { HermesConfig } from "../types";
 import { DEFAULT_CONFIG } from "../types";
@@ -19,6 +19,7 @@ beforeEach(async () => {
   // Simulate a repo with .athena/hermes/
   hermesDir = path.join(tmpDir, ".athena", "hermes");
   await fs.mkdir(hermesDir, { recursive: true });
+  _resetCache();
 });
 
 afterEach(async () => {

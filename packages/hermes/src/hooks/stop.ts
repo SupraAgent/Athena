@@ -8,23 +8,22 @@ import {
 } from "../memory-store";
 import { loadConfig, getHermesDir, findRepoRoot } from "../config";
 
-/** Patterns for extracting facts from a transcript. */
-const FACT_PATTERNS = [
-  /(?:this (?:project|repo|codebase) (?:uses?|has|runs?))\s+(.+?)(?:\.|$)/gi,
-  /(?:we (?:chose|decided|switched to|use|are using))\s+(.+?)(?:\.|$)/gi,
-  /(?:the (?:deploy|build|test) (?:target|command|process) is)\s+(.+?)(?:\.|$)/gi,
-  /(?:important|note|remember):\s*(.+?)(?:\.|$)/gi,
+/** Pattern sources — fresh RegExp instances created per call to avoid lastIndex state. */
+const FACT_PATTERN_SOURCES = [
+  "(?:this (?:project|repo|codebase) (?:uses?|has|runs?))\\s+(.+?)(?:\\.|$)",
+  "(?:we (?:chose|decided|switched to|use|are using))\\s+(.+?)(?:\\.|$)",
+  "(?:the (?:deploy|build|test) (?:target|command|process) is)\\s+(.+?)(?:\\.|$)",
+  "(?:important|note|remember):\\s*(.+?)(?:\\.|$)",
 ];
 
-/** Patterns for extracting decisions. */
-const DECISION_PATTERNS = [
-  /(?:decided to|decision:|we (?:will|should|chose to))\s+(.+?)(?:\.|$)/gi,
-  /(?:architectural (?:decision|choice)|design decision):\s*(.+?)(?:\.|$)/gi,
-  /(?:going with|opted for|picking)\s+(.+?)(?:\s+(?:because|since|over))/gi,
+const DECISION_PATTERN_SOURCES = [
+  "(?:decided to|decision:|we (?:will|should|chose to))\\s+(.+?)(?:\\.|$)",
+  "(?:architectural (?:decision|choice)|design decision):\\s*(.+?)(?:\\.|$)",
+  "(?:going with|opted for|picking)\\s+(.+?)(?:\\s+(?:because|since|over))",
 ];
 
-/** Patterns for file paths. */
-const FILE_PATTERN = /(?:(?:created?|modif(?:ied|y)|edit(?:ed)?|updat(?:ed)?|delet(?:ed)?|wrote?|fix(?:ed)?)\s+)([`"']?[\w/.@-]+\.\w{1,10}[`"']?)/gi;
+const FILE_PATTERN_SOURCE =
+  "(?:(?:created?|modif(?:ied|y)|edit(?:ed)?|updat(?:ed)?|delet(?:ed)?|wrote?|fix(?:ed)?)\\s+)([`\"']?[\\w/.@-]+/[\\w/.@-]+\\.[a-zA-Z]{1,10}[`\"']?)";
 
 /** Extract memories from a session transcript using heuristics. */
 function extractFromTranscript(transcript: string): {
@@ -36,8 +35,8 @@ function extractFromTranscript(transcript: string): {
   const decisions: string[] = [];
   const files: string[] = [];
 
-  for (const pattern of FACT_PATTERNS) {
-    pattern.lastIndex = 0;
+  for (const src of FACT_PATTERN_SOURCES) {
+    const pattern = new RegExp(src, "gi");
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(transcript)) !== null) {
       const fact = match[1].trim();
@@ -47,8 +46,8 @@ function extractFromTranscript(transcript: string): {
     }
   }
 
-  for (const pattern of DECISION_PATTERNS) {
-    pattern.lastIndex = 0;
+  for (const src of DECISION_PATTERN_SOURCES) {
+    const pattern = new RegExp(src, "gi");
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(transcript)) !== null) {
       const decision = match[1].trim();
@@ -58,11 +57,12 @@ function extractFromTranscript(transcript: string): {
     }
   }
 
-  FILE_PATTERN.lastIndex = 0;
+  // File pattern requires a "/" to avoid matching method calls like Date.now()
+  const filePattern = new RegExp(FILE_PATTERN_SOURCE, "gi");
   let fileMatch: RegExpExecArray | null;
-  while ((fileMatch = FILE_PATTERN.exec(transcript)) !== null) {
+  while ((fileMatch = filePattern.exec(transcript)) !== null) {
     const filePath = fileMatch[1].replace(/[`"']/g, "");
-    if (filePath.includes("/") || filePath.includes(".")) {
+    if (filePath.includes("/")) {
       files.push(filePath);
     }
   }
@@ -74,12 +74,13 @@ function extractFromTranscript(transcript: string): {
   };
 }
 
-/** Generate a brief summary from the transcript. */
+/** Generate a brief summary from the transcript — prefers the final lines (conclusion). */
 function generateSummary(transcript: string, maxLen = 200): string {
-  // Take first meaningful paragraph
   const lines = transcript.split("\n").filter((l) => l.trim().length > 20);
   if (lines.length === 0) return "Session with no extractable summary.";
-  const combined = lines.slice(0, 5).join(" ").trim();
+  // Take the last 5 meaningful lines (conclusion > intro)
+  const tail = lines.slice(-5);
+  const combined = tail.join(" ").trim();
   return combined.length > maxLen ? combined.slice(0, maxLen - 3) + "..." : combined;
 }
 
@@ -90,7 +91,7 @@ export async function onStop(
   startedAt: string,
   repoRoot?: string
 ): Promise<HookOutput> {
-  const root = repoRoot ?? await findRepoRoot();
+  const root = repoRoot ?? findRepoRoot();
   const hermesDir = getHermesDir(root);
   const config = await loadConfig(hermesDir);
 
@@ -102,28 +103,27 @@ export async function onStop(
   const { facts, decisions, files } = extractFromTranscript(transcript);
   let saved = 0;
 
-  // Save extracted facts
-  for (const fact of facts.slice(0, 5)) {
-    const mem = {
-      id: "", type: "fact" as const, content: fact, tags: [],
-      createdAt: "", updatedAt: "", source: sid, relevance: 0.6,
+  // Helper: check dedup and track newly created memories
+  async function saveIfNew(type: "fact" | "decision", content: string, relevance: number) {
+    const candidate = {
+      id: "", type, content, tags: [] as string[],
+      createdAt: "", updatedAt: "", source: sid, relevance,
     };
-    if (!deduplicateMemories(existing, mem)) {
-      await createMemory(hermesDir, "fact", fact, [], sid, 0.6);
+    if (!deduplicateMemories(existing, candidate)) {
+      const created = await createMemory(hermesDir, type, content, [], sid, relevance);
+      existing.push(created); // Update snapshot to prevent within-loop duplicates
       saved++;
     }
   }
 
+  // Save extracted facts
+  for (const fact of facts.slice(0, 5)) {
+    await saveIfNew("fact", fact, 0.6);
+  }
+
   // Save extracted decisions
   for (const decision of decisions.slice(0, 3)) {
-    const mem = {
-      id: "", type: "decision" as const, content: decision, tags: [],
-      createdAt: "", updatedAt: "", source: sid, relevance: 0.8,
-    };
-    if (!deduplicateMemories(existing, mem)) {
-      await createMemory(hermesDir, "decision", decision, [], sid, 0.8);
-      saved++;
-    }
+    await saveIfNew("decision", decision, 0.8);
   }
 
   // Save session summary
