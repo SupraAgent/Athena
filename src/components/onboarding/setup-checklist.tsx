@@ -28,13 +28,13 @@ export function SetupChecklist({ hasBotToken, hasGroups, hasDeals, hasContacts, 
 
   // Show welcome modal on first visit
   React.useEffect(() => {
-    const seen = localStorage.getItem("supracrm:welcome-seen");
+    const seen = localStorage.getItem("athena:welcome-seen");
     if (!seen) setShowWelcome(true);
   }, []);
 
   function dismissWelcome() {
     setShowWelcome(false);
-    localStorage.setItem("supracrm:welcome-seen", "1");
+    localStorage.setItem("athena:welcome-seen", "1");
   }
 
   const items: ChecklistItem[] = [

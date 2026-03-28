@@ -4,21 +4,18 @@ import { createSupabaseAdmin } from "@/lib/supabase";
 /**
  * Health check endpoint for Railway load balancer.
  * Returns 200 if the app is running and can reach Supabase.
- * Railway pings this to know the service is healthy.
  */
 export async function GET() {
   const checks: Record<string, boolean> = {
     app: true,
     supabase: false,
-    telegram_bot: !!process.env.TELEGRAM_BOT_TOKEN,
-    email: !!process.env.GOOGLE_CLIENT_ID,
   };
 
-  // Check Supabase connectivity
+  // Check Supabase connectivity using the personas table (has migration)
   try {
     const admin = createSupabaseAdmin();
     if (admin) {
-      const { error } = await admin.from("pipeline_stages").select("id").limit(1);
+      const { error } = await admin.from("personas").select("id").limit(1);
       checks.supabase = !error;
     }
   } catch {

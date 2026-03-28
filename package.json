@@ -1,5 +1,5 @@
 {
-  "name": "supraloop",
+  "name": "athena",
   "version": "0.1.0",
   "private": true,
   "workspaces": ["packages/*"],
@@ -48,9 +48,5 @@
     "@types/react-dom": "^19.1.2",
     "tailwindcss": "^4.1.4",
     "typescript": "^5.8.3"
-  },
-  "automationBuilder": {
-    "lastSync": "2026-03-23T04:30:29Z",
-    "syncedFrom": "1d225a1e"
   }
 }

@@ -4,7 +4,7 @@ import * as React from "react";
 
 type Theme = "dark" | "light";
 
-const STORAGE_KEY = "supracrm:theme:v1";
+const STORAGE_KEY = "athena:theme:v1";
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = React.useState<Theme>("dark");

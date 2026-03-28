@@ -1,13 +1,12 @@
-# SupraLoop
+# Athena
 
-Iterative improvement engine. Benchmark your app against competitors, auto-generate CPO personas, and close the gap round by round.
-
-**[supraloop.xyz](https://supraloop.xyz)**
+The coordinating intelligence layer for the Supra ecosystem. Combines the SupraLoop improvement engine, a shared workflow builder, and cross-project coordination.
 
 ---
 
 ## How It Works
 
+### SupraLoop (Improvement Engine)
 ```
 1. TEAM       → 5 AI personas with weighted voting
 2. APP        → Define what you're building
@@ -16,19 +15,16 @@ Iterative improvement engine. Benchmark your app against competitors, auto-gener
 5. IMPROVE    → Press the button. One change per round. Repeat until competitive.
 ```
 
-Key rules:
-- One change per round (isolates impact)
-- Score can't go down (revert if it does)
-- Retro every 5 rounds (swap personas if not converging)
-- Stop when gap < 10 from target
+### Builder (Workflow Automation)
+Self-contained drag-and-drop workflow builder in `packages/builder/`. See `FORK_ME.md` for extraction guide.
 
 ---
 
 ## Setup
 
 ```bash
-git clone https://github.com/SupraAgent/SupraLoop.git
-cd SupraLoop
+git clone https://github.com/SupraAgent/Athena.git
+cd Athena
 npm install
 cp .env.example .env.local
 # Add your Supabase keys to .env.local
@@ -45,7 +41,14 @@ Next.js 15 · React 19 · TypeScript · Tailwind CSS 4 · Supabase · Anthropic 
 
 ## Architecture
 
-- **Frontend:** supraloop.xyz handles benchmarking, scoring, CPO generation
+- **Frontend:** Handles benchmarking, scoring, CPO generation, workflow building
 - **AI:** User's Anthropic API key (stored in browser, never on server)
 - **Data:** `.supraloop/` directory committed to user's GitHub repo
+- **Builder:** `packages/builder/` — reusable across Supra apps
 - **No vendor lock-in:** Config, scores, CPOs, and round logs are all in your repo
+
+---
+
+## Legacy
+
+The old automation-builder code is preserved on the `legacy/automation-builder` branch.
