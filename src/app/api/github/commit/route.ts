@@ -56,15 +56,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing branch or message" }, { status: 400 });
   }
 
-  // Path traversal protection: all file paths must be under .supraloop/
+  // Path traversal protection: all file paths must be under .athena/
   for (const file of files) {
     if (typeof file.path !== "string" || typeof file.content !== "string") {
       return NextResponse.json({ error: "Each file must have a string path and content" }, { status: 400 });
     }
     const normalized = file.path.replace(/\\/g, "/");
-    if (normalized.includes("..") || !normalized.startsWith(".supraloop/")) {
+    if (normalized.includes("..") || !normalized.startsWith(".athena/")) {
       return NextResponse.json(
-        { error: `File path "${file.path}" is not allowed. All paths must be under .supraloop/` },
+        { error: `File path "${file.path}" is not allowed. All paths must be under .athena/` },
         { status: 400 }
       );
     }

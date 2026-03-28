@@ -24,7 +24,7 @@ Session memory and context relay module — persistent memory across Claude Code
 - **Frontend:** Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 4, Framer Motion
 - **Auth:** Supabase (GitHub OAuth)
 - **AI:** Anthropic API (user provides their own key, stored in localStorage)
-- **Data:** `.supraloop/` directory committed to user's GitHub repo (config, scores, CPOs, round logs)
+- **Data:** `.athena/` directory committed to user's GitHub repo (config, scores, CPOs, round logs)
 - **Builder:** `packages/builder/` — self-contained workflow builder package
 - **No vendor lock-in:** All data lives in the user's repo
 
@@ -51,4 +51,4 @@ GitHub API / Octokit (repo integration)
 
 ## Legacy
 - Old automation-builder code is preserved on the `legacy/automation-builder` branch
-- The `FORK_ME.md` file documents how to extract the builder package
+- See `FORK_ME.md` for the complete fork checklist (based on lessons from SupraLoop → Athena)

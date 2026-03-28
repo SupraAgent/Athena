@@ -16,7 +16,7 @@ The coordinating intelligence layer for the Supra ecosystem. Combines the SupraL
 ```
 
 ### Builder (Workflow Automation)
-Self-contained drag-and-drop workflow builder in `packages/builder/`. See `FORK_ME.md` for extraction guide.
+Self-contained drag-and-drop workflow builder in `packages/builder/`.
 
 ---
 
@@ -43,7 +43,7 @@ Next.js 15 · React 19 · TypeScript · Tailwind CSS 4 · Supabase · Anthropic 
 
 - **Frontend:** Handles benchmarking, scoring, CPO generation, workflow building
 - **AI:** User's Anthropic API key (stored in browser, never on server)
-- **Data:** `.supraloop/` directory committed to user's GitHub repo
+- **Data:** `.athena/` directory committed to user's GitHub repo
 - **Builder:** `packages/builder/` — reusable across Supra apps
 - **No vendor lock-in:** Config, scores, CPOs, and round logs are all in your repo
 
@@ -51,4 +51,4 @@ Next.js 15 · React 19 · TypeScript · Tailwind CSS 4 · Supabase · Anthropic 
 
 ## Legacy
 
-The old automation-builder code is preserved on the `legacy/automation-builder` branch.
+The old automation-builder code is preserved on the `legacy/automation-builder` branch. See `FORK_ME.md` for the complete fork checklist.

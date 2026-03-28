@@ -214,7 +214,7 @@ export default function ReposPage() {
             </Button>
           </div>
 
-          {/* .supraloop/ directory concept */}
+          {/* .athena/ directory concept */}
           <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.02] px-4 py-3">
             <p className="text-xs font-medium text-foreground mb-2">
               What gets committed to your repo
@@ -222,27 +222,32 @@ export default function ReposPage() {
             <div className="space-y-1 font-mono text-xs text-muted-foreground">
               <div className="flex items-center gap-2">
                 <span className="text-primary">📁</span>
-                <span className="text-foreground">.supraloop/</span>
+                <span className="text-foreground">.athena/</span>
               </div>
               <div className="flex items-center gap-2 pl-4">
                 <span className="text-white/30">├─</span>
-                <span>config.json</span>
+                <span>config.yaml</span>
                 <span className="text-white/30 ml-1">— project settings &amp; personas</span>
               </div>
               <div className="flex items-center gap-2 pl-4">
                 <span className="text-white/30">├─</span>
-                <span>benchmarks/</span>
-                <span className="text-white/30 ml-1">— benchmark definitions</span>
+                <span>benchmarks.yaml</span>
+                <span className="text-white/30 ml-1">— reference app scores</span>
               </div>
               <div className="flex items-center gap-2 pl-4">
                 <span className="text-white/30">├─</span>
-                <span>scores/</span>
-                <span className="text-white/30 ml-1">— scored runs per round</span>
+                <span>scores.yaml</span>
+                <span className="text-white/30 ml-1">— consensus &amp; gap analysis</span>
+              </div>
+              <div className="flex items-center gap-2 pl-4">
+                <span className="text-white/30">├─</span>
+                <span>rounds/</span>
+                <span className="text-white/30 ml-1">— improvement round logs</span>
               </div>
               <div className="flex items-center gap-2 pl-4">
                 <span className="text-white/30">└─</span>
-                <span>rounds/</span>
-                <span className="text-white/30 ml-1">— improvement round logs</span>
+                <span>cpos/</span>
+                <span className="text-white/30 ml-1">— competitor CPO personas</span>
               </div>
             </div>
           </div>
@@ -251,7 +256,7 @@ export default function ReposPage() {
             <div className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(12,206,107,0.6)]" />
             <p className="text-xs text-muted-foreground">
               Repo connected. Athena will read and write to{" "}
-              <code className="text-primary">.supraloop/</code> on your{" "}
+              <code className="text-primary">.athena/</code> on your{" "}
               <code className="text-primary">{selected.default_branch}</code> branch.
             </p>
           </div>
@@ -276,7 +281,7 @@ export default function ReposPage() {
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
             Athena will commit a{" "}
-            <code className="text-primary">.supraloop/</code> directory to your
+            <code className="text-primary">.athena/</code> directory to your
             repo with config, benchmarks, scores, and round logs.
           </p>
           <div className="mt-5">

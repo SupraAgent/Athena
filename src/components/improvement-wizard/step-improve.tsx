@@ -15,7 +15,7 @@ import {
 import {
   generateAthenaFiles,
   generateCommitMessage,
-} from "@/lib/supraloop-config";
+} from "@/lib/athena-config";
 import { LoadingProgress } from "@/components/ui/loading-progress";
 import { generateGapWorkflow } from "@supra/builder";
 
@@ -577,7 +577,7 @@ export function StepImprove({ draft, onChange, onGenerateWorkflow }: Props) {
                 Save to GitHub
               </p>
               <p className="text-xs text-muted-foreground">
-                Commit your .supraloop/ config, scores, and round logs to your
+                Commit your .athena/ config, scores, and round logs to your
                 repo.
               </p>
             </div>
