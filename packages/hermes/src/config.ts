@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
 import * as YAML from "yaml";
-import type { HermesConfig, HermesMode, ConversationMap, ConversationThread, SyncState } from "./types";
+import type { HermesConfig, HermesMode, ChannelType, ConversationMap, ConversationThread, SyncState } from "./types";
 import { DEFAULT_CONFIG } from "./types";
 
 /** Atomic write: temp file + rename to prevent corruption from concurrent writes. */
@@ -78,6 +78,12 @@ export async function loadConfig(hermesDir: string): Promise<HermesConfig> {
         reportsTo: a.reports_to ? String(a.reports_to) : null,
         triggers: Array.isArray(a.triggers) ? a.triggers.map(String) : [],
       })),
+      channels: (parsed?.channels ?? []).map((c: Record<string, unknown>) => ({
+        type: String(c.type ?? "") as ChannelType,
+        enabled: c.enabled !== false,
+        options: (c.options as Record<string, unknown>) ?? {},
+        ttlMs: Number(c.ttl_ms) || 300000,
+      })),
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -105,6 +111,15 @@ export async function saveConfig(hermesDir: string, config: HermesConfig): Promi
       monthly_budget_usd: a.monthlyBudgetUsd,
       reports_to: a.reportsTo,
       triggers: a.triggers,
+    })),
+    channels: config.channels.map((c) => ({
+      type: c.type,
+      enabled: c.enabled,
+      // SECURITY: Strip any keys/tokens from channel options
+      options: Object.fromEntries(
+        Object.entries(c.options).filter(([k]) => !k.includes("token") && !k.includes("key") && !k.includes("secret"))
+      ),
+      ttl_ms: c.ttlMs,
     })),
   };
   // SECURITY: Never write API keys to config files (could be committed to git).

@@ -3,6 +3,7 @@ import { loadMemories, loadAllRemoteMemories } from "../memory-store";
 import { loadConfig, getHermesDir, findRepoRoot, resolveMode, getOrCreateThread } from "../config";
 import { hashMemories, formatFullBlocks } from "../diff";
 import { loadCachedRemoteMemories, isCacheStale, triggerBackgroundRefresh } from "../remote-cache";
+import { loadCachedChannelMemories, isChannelCacheStale, triggerChannelRefresh } from "../channels/manager";
 import { sanitizeMemories } from "../sanitize";
 import { getBranchFiles, branchBoost } from "../git-aging";
 import { runVerificationSweep, formatSweepResults } from "../verification";
@@ -40,8 +41,17 @@ export async function onSessionStart(
     }
   }
 
+  // Load channel data from cache (never blocks on network)
+  let channelMemories: Memory[] = [];
+  if (config.channels && config.channels.length > 0) {
+    channelMemories = await loadCachedChannelMemories(hermesDir, config.channels, sessionId);
+    if (await isChannelCacheStale(hermesDir, config.channels)) {
+      triggerChannelRefresh(hermesDir, config.channels);
+    }
+  }
+
   // Sanitize all memories before injection
-  const allMemories = sanitizeMemories([...localMemories, ...remoteMemories]);
+  const allMemories = sanitizeMemories([...localMemories, ...remoteMemories, ...channelMemories]);
   if (allMemories.length === 0) {
     return { context: "" };
   }
