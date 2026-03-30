@@ -278,8 +278,52 @@ export {
 } from "./verification";
 export type { VerifyResult, SweepResult } from "./verification";
 
+// ── Session Scoring ──────────────────────────────────────────
+export {
+  saveScorecard,
+  loadScorecards,
+  analyzeTrend,
+  formatTrend,
+} from "./session-scoring";
+export type { SessionScorecard, SessionTrend } from "./session-scoring";
+
+// ── Rule Graduation ──────────────────────────────────────────
+export {
+  findGraduationCandidates,
+  graduateMemory,
+  rejectGraduation,
+  loadGraduationLog,
+  formatCandidates,
+} from "./graduation";
+export type { GraduationCandidate, GraduationResult } from "./graduation";
+
 // ── JSON Extraction ───────────────────────────────────────────
 export { extractBalancedJson } from "./json-extract";
+
+// ── External Channels ────────────────────────────────────────
+export {
+  GitHubChannel,
+  SentryChannel,
+  LinearChannel,
+  JiraChannel,
+  CompetitorChannel,
+  getDefaultRegistry,
+  checkAll as checkAllChannels,
+  fetchAll as fetchAllChannels,
+  candidateToMemory,
+  loadCachedChannelMemories,
+  isChannelCacheStale,
+  triggerChannelRefresh,
+} from "./channels";
+export type {
+  ChannelStatus,
+  ChannelConfig,
+  ChannelMemoryCandidate,
+  ChannelFetchResult,
+  ChannelCacheEntry,
+  ChannelCacheFile,
+  ExternalChannel,
+} from "./channels";
 
 // ── Hooks ────────────────────────────────────────────────────────
 export { onSessionStart } from "./hooks/session-start";
