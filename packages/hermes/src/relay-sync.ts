@@ -8,8 +8,16 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as crypto from "crypto";
 import * as YAML from "yaml";
 import type { Memory, ExternalSource } from "./types";
+
+/** Atomic write: temp file + rename. */
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
 import { loadMemories, saveMemory } from "./memory-store";
 import { loadRemoteMemories } from "./memory-store";
 import { findSimilar } from "./semantic";
@@ -155,7 +163,7 @@ export async function saveRelayManifest(
   const filePath = manifestPath(hermesDir);
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const content = `# Hermes Relay Manifest\n${YAML.stringify(manifest)}`;
-  await fs.writeFile(filePath, content, "utf-8");
+  await atomicWriteFile(filePath, content);
 }
 
 // ── Helpers ────────────────────────────────────────────────────
@@ -306,7 +314,7 @@ export async function pushLocalMemories(
 
     const filePath = path.join(relayDir, `${sourceLabel}.yaml`);
     const content = `# Hermes Relay Export — ${sourceLabel}\n${YAML.stringify(relayData)}`;
-    await fs.writeFile(filePath, content, "utf-8");
+    await atomicWriteFile(filePath, content);
 
     result.pushed = userMemories.length;
 

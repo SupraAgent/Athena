@@ -24,6 +24,7 @@ import { SentryChannel } from "./sentry";
 import { LinearChannel } from "./linear";
 import { JiraChannel } from "./jira";
 import { CompetitorChannel } from "./competitor";
+import { LocalTasksChannel } from "./local-tasks";
 
 // ── Registry ───────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ const DEFAULT_CHANNELS: ExternalChannel[] = [
   new LinearChannel(),
   new JiraChannel(),
   new CompetitorChannel(),
+  new LocalTasksChannel(),
 ];
 
 /** Build a registry map from all known channels. */

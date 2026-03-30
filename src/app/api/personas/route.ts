@@ -76,6 +76,10 @@ export async function POST(request: NextRequest) {
         scoring_weights: body.scoring_weights || null,
         icon: body.icon || null,
         created_by: user.id,
+        heartbeat_minutes: body.heartbeat_minutes ?? 60,
+        monthly_budget_usd: body.monthly_budget_usd ?? 50,
+        reports_to: body.reports_to || null,
+        triggers: body.triggers || [],
       })
       .select()
       .single();

@@ -68,10 +68,24 @@ export async function getOrCreateSalt(hermesDir: string): Promise<Buffer> {
   }
 }
 
-/** Resolve the encryption key from env var + project salt. Returns null if not configured. */
+// ── Per-session key cache (avoids running 100K PBKDF2 iterations on every call) ──
+let _cachedKey: Buffer | null = null;
+let _cachedKeyDir = "";
+let _cachedKeyPassphrase = "";
+
+/** Resolve the encryption key from env var + project salt. Cached per session. Returns null if not configured. */
 export async function resolveEncryptionKey(hermesDir: string): Promise<Buffer | null> {
   const passphrase = process.env.HERMES_ENCRYPTION_KEY;
   if (!passphrase) return null;
+
+  // Return cached key if same dir + passphrase
+  if (_cachedKey && _cachedKeyDir === hermesDir && _cachedKeyPassphrase === passphrase) {
+    return _cachedKey;
+  }
+
   const salt = await getOrCreateSalt(hermesDir);
-  return deriveKey(passphrase, salt);
+  _cachedKey = await deriveKey(passphrase, salt);
+  _cachedKeyDir = hermesDir;
+  _cachedKeyPassphrase = passphrase;
+  return _cachedKey;
 }

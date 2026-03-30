@@ -14,6 +14,14 @@ export type Persona = {
   createdAt: string;
   updatedAt: string;
   isBuiltIn?: boolean;
+  /** Agent orchestration — heartbeat check-in interval in minutes. */
+  heartbeatMinutes: number;
+  /** Agent orchestration — monthly budget cap in USD. */
+  monthlyBudgetUsd: number;
+  /** Agent orchestration — ID of the manager persona (org hierarchy). */
+  reportsTo: string | null;
+  /** Agent orchestration — events/topics that activate this agent. */
+  triggers: string[];
 };
 
 export const CAPABILITIES = [
@@ -52,6 +60,10 @@ export function mapPersona(row: Record<string, unknown>): Persona {
     createdBy: (row.created_by as string) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
+    heartbeatMinutes: (row.heartbeat_minutes as number) ?? 60,
+    monthlyBudgetUsd: (row.monthly_budget_usd as number) ?? 50,
+    reportsTo: (row.reports_to as string) ?? null,
+    triggers: (row.triggers as string[]) ?? [],
   };
 }
 
@@ -85,6 +97,10 @@ When scoring, weight ux_quality and change_coherence heavily. A focused change t
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     isBuiltIn: true,
+    heartbeatMinutes: 60,
+    monthlyBudgetUsd: 50,
+    reportsTo: null,
+    triggers: [],
   },
   {
     id: `${BUILTIN_PREFIX}2`,
@@ -117,6 +133,10 @@ Weight change_coherence, code_quality, and commit_discipline. Output a markdown 
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     isBuiltIn: true,
+    heartbeatMinutes: 60,
+    monthlyBudgetUsd: 50,
+    reportsTo: null,
+    triggers: [],
   },
   {
     id: `${BUILTIN_PREFIX}3`,
@@ -152,6 +172,10 @@ Weight ux_quality at 2x. If no UI files changed, skip this review and say so. Ou
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     isBuiltIn: true,
+    heartbeatMinutes: 60,
+    monthlyBudgetUsd: 50,
+    reportsTo: null,
+    triggers: [],
   },
   {
     id: `${BUILTIN_PREFIX}4`,
@@ -187,6 +211,10 @@ Weight code_quality at 2x and build_health at 1.5x. Output prose: lead with the 
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     isBuiltIn: true,
+    heartbeatMinutes: 60,
+    monthlyBudgetUsd: 50,
+    reportsTo: null,
+    triggers: [],
   },
   {
     id: `${BUILTIN_PREFIX}5`,
@@ -224,6 +252,10 @@ Weight build_health and commit_discipline at 2x. Output a markdown checklist wit
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     isBuiltIn: true,
+    heartbeatMinutes: 60,
+    monthlyBudgetUsd: 50,
+    reportsTo: null,
+    triggers: [],
   },
   {
     id: `${BUILTIN_PREFIX}6`,
@@ -262,6 +294,10 @@ Weight code_quality and build_health at 1.5x. Output JSON scores with a test_cov
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
     isBuiltIn: true,
+    heartbeatMinutes: 60,
+    monthlyBudgetUsd: 50,
+    reportsTo: null,
+    triggers: [],
   },
 ];
 

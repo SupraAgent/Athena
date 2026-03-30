@@ -129,7 +129,7 @@ export type AgentConfig = {
 // ── External Channels ──────────────────────────────────────────
 
 /** Channel type identifiers for external data sources. */
-export type ChannelType = "github" | "sentry" | "linear" | "jira" | "competitor";
+export type ChannelType = "github" | "sentry" | "linear" | "jira" | "competitor" | "local-tasks";
 
 /** Configuration for a single external channel. */
 export type ChannelConfigEntry = {

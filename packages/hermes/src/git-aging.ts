@@ -168,6 +168,7 @@ export async function ageMemories(
     // Skip session summaries and heartbeats
     if (mem.type === "session-summary" || mem.type === "agent-heartbeat") continue;
 
+    let newRelevance = mem.relevance;
     let changed = false;
     const filePaths = extractFilePaths(mem.content);
 
@@ -175,7 +176,7 @@ export async function ageMemories(
     for (const fp of filePaths) {
       if (!fileExistsInRepo(fp, repoRoot)) {
         // File was deleted — decay relevance
-        mem.relevance = Math.max(0.1, mem.relevance * 0.5);
+        newRelevance = Math.max(0.1, newRelevance * 0.5);
         staleFiles.push(fp);
         changed = true;
         decayed++;
@@ -185,7 +186,7 @@ export async function ageMemories(
       const lastMod = getLastModified(fp, repoRoot);
       if (lastMod && now - lastMod.getTime() < sevenDaysMs) {
         // File was recently modified — boost relevance
-        mem.relevance = Math.min(1, mem.relevance + 0.1);
+        newRelevance = Math.min(1, newRelevance + 0.1);
         changed = true;
         boosted++;
         break;
@@ -195,14 +196,19 @@ export async function ageMemories(
     // Time-based decay for old, unaccessed memories
     const ageMs = now - new Date(mem.updatedAt).getTime();
     if (ageMs > thirtyDaysMs && !changed) {
-      mem.relevance = Math.max(0.1, mem.relevance * 0.8);
+      newRelevance = Math.max(0.1, newRelevance * 0.8);
       changed = true;
       decayed++;
     }
 
     if (changed) {
-      mem.updatedAt = new Date().toISOString();
-      await saveMemory(hermesDir, mem);
+      // Create new object — never mutate the loaded memory
+      const updated: Memory = {
+        ...mem,
+        relevance: newRelevance,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveMemory(hermesDir, updated);
     }
   }
 

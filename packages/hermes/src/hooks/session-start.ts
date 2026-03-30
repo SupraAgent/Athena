@@ -3,9 +3,11 @@ import { loadMemories, loadAllRemoteMemories } from "../memory-store";
 import { loadConfig, getHermesDir, findRepoRoot, resolveMode, getOrCreateThread } from "../config";
 import { hashMemories, formatFullBlocks } from "../diff";
 import { loadCachedRemoteMemories, isCacheStale, triggerBackgroundRefresh } from "../remote-cache";
+import { loadCachedChannelMemories, isChannelCacheStale, triggerChannelRefresh } from "../channels/manager";
 import { sanitizeMemories } from "../sanitize";
 import { getBranchFiles, branchBoost } from "../git-aging";
 import { runVerificationSweep, formatSweepResults } from "../verification";
+import { loadScorecards, analyzeTrend, formatTrend } from "../session-scoring";
 
 /** SessionStart hook: load and rank memories, initialize thread, return context. */
 export async function onSessionStart(
@@ -40,8 +42,17 @@ export async function onSessionStart(
     }
   }
 
+  // Load channel data from cache (never blocks on network)
+  let channelMemories: Memory[] = [];
+  if (config.channels && config.channels.length > 0) {
+    channelMemories = await loadCachedChannelMemories(hermesDir, config.channels, sessionId);
+    if (await isChannelCacheStale(hermesDir, config.channels)) {
+      triggerChannelRefresh(hermesDir, config.channels);
+    }
+  }
+
   // Sanitize all memories before injection
-  const allMemories = sanitizeMemories([...localMemories, ...remoteMemories]);
+  const allMemories = sanitizeMemories([...localMemories, ...remoteMemories, ...channelMemories]);
   if (allMemories.length === 0) {
     return { context: "" };
   }
@@ -49,6 +60,19 @@ export async function onSessionStart(
   // Run verification sweep on memories with verify checks
   const sweepResult = await runVerificationSweep(allMemories, root, hermesDir, sessionId);
   const violationBlock = formatSweepResults(sweepResult);
+
+  // Load session trend (non-blocking — empty string if not enough data)
+  let trendLine = "";
+  try {
+    const scorecards = await loadScorecards(hermesDir);
+    trendLine = formatTrend(analyzeTrend(scorecards));
+  } catch {
+    // Trend is non-critical
+  }
+
+  // Combine preamble blocks (violations + trend)
+  const preambleParts = [violationBlock, trendLine].filter(Boolean);
+  const preamble = preambleParts.join("\n\n");
 
   // Get branch context for relevance boosting
   const branchFiles = getBranchFiles(root);
@@ -64,7 +88,7 @@ export async function onSessionStart(
     const whisperTypes = new Set(["decision", "guidance", "pending"]);
     const whisperMemories = ranked.filter((m) => whisperTypes.has(m.type));
     if (whisperMemories.length === 0) {
-      return { context: violationBlock };
+      return { context: preamble };
     }
 
     const lines = [
@@ -76,14 +100,13 @@ export async function onSessionStart(
         return `- **[${label}]** ${m.content}`;
       }),
     ];
-    // Prepend violations if any
     const memoryContext = lines.join("\n");
-    return { context: violationBlock ? violationBlock + "\n\n" + memoryContext : memoryContext };
+    return { context: preamble ? preamble + "\n\n" + memoryContext : memoryContext };
   }
 
   // Full mode — inject all memory blocks
   const context = formatFullBlocks(ranked);
-  return { context: violationBlock ? violationBlock + "\n\n" + context : context };
+  return { context: preamble ? preamble + "\n\n" + context : context };
 }
 
 /** Estimate token count for a string (~3.5 chars per token). */

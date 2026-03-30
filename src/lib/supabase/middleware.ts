@@ -32,17 +32,23 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
+  // Dev login bypass: cookie set by /login with password "dev"
+  const hasDevAuth = request.cookies.get("athena-dev-auth")?.value === "authenticated";
+
   const pathname = request.nextUrl.pathname;
   const isPublicRoute =
-    pathname === "/login" || pathname.startsWith("/auth/");
+    pathname === "/login" ||
+    pathname.startsWith("/auth/") ||
+    pathname === "/" ||
+    pathname.startsWith("/api/tasks");
 
-  if (!user && !isPublicRoute) {
+  if (!user && !hasDevAuth && !isPublicRoute) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("next", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  if (user && pathname === "/login") {
+  if ((user || hasDevAuth) && pathname === "/login") {
     return NextResponse.redirect(new URL("/", request.url));
   }
 

@@ -18,6 +18,9 @@ import {
 } from "./memory-store";
 import { smartConsolidate } from "./mem0-pipeline";
 import { loadConfig, getHermesDir, findRepoRoot, resolveAnthropicKey } from "./config";
+import { queryEvents } from "./event-log";
+import { saveScorecard } from "./session-scoring";
+import { applyFeedbackToRelevance } from "./feedback-loop";
 import type { SessionSummary } from "./types";
 
 interface WorkerPayload {
@@ -82,9 +85,56 @@ async function main(): Promise<void> {
   };
   await saveSessionSummary(hermesDir, summary);
 
+  // Apply accumulated feedback signals to memory relevance
+  try {
+    const feedback = await applyFeedbackToRelevance(hermesDir);
+    if (feedback.adjusted > 0) {
+      process.stderr.write(
+        `[hermes-worker] Feedback applied: ${feedback.boosted} boosted, ${feedback.decayed} decayed\n`
+      );
+    }
+  } catch {
+    // Non-critical
+  }
+
   // Prune if over limit
   if (config.maxMemories > 0) {
     await pruneMemories(hermesDir, config.maxMemories);
+  }
+
+  // Session scoring — count events from today's log for this session
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const todayEvents = await queryEvents(hermesDir, { date: today, sessionId });
+
+    const correctionsReceived = todayEvents.filter(
+      (e) => e.event === "correction.detected" || e.event === "correction.promoted"
+    ).length;
+    const memoriesPromoted = todayEvents.filter((e) => e.event === "correction.promoted").length;
+    const sweepEvents = todayEvents.filter((e) => e.event === "verification.sweep");
+    const lastSweep = sweepEvents[sweepEvents.length - 1];
+    const rulesChecked = (lastSweep?.payload?.checked as number) ?? 0;
+    const rulesPassed = (lastSweep?.payload?.passed as number) ?? 0;
+    const rulesFailed = (lastSweep?.payload?.failed as number) ?? 0;
+    const violations = todayEvents
+      .filter((e) => e.event === "verification.failed")
+      .map((e) => String(e.payload?.detail ?? "").slice(0, 80));
+    const memoriesCreated = todayEvents.filter((e) => e.event === "memory.created").length;
+
+    await saveScorecard(hermesDir, {
+      date: today,
+      sessionId,
+      correctionsReceived,
+      memoriesSurfaced: 0, // Not tracked in worker (happens in session-start hook)
+      rulesChecked,
+      rulesPassed,
+      rulesFailed,
+      violations,
+      memoriesCreated: memoriesCreated + saved,
+      memoriesPromoted,
+    });
+  } catch {
+    // Scoring is non-critical — don't fail the worker
   }
 
   process.stderr.write(

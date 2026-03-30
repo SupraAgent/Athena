@@ -12,7 +12,9 @@ import { AgentTaskChart } from "@/components/charts/agent-task-chart";
 import { AgentTokenConfig } from "@/components/agents/agent-token-config";
 import { PersonaSelector } from "@/components/agents/persona-selector";
 import { PersonasTab } from "@/components/agents/personas-tab";
+import { OrgChartPanel } from "@/components/agents/org-chart-panel";
 import type { Persona } from "@/lib/personas";
+import { mapPersona, DEFAULT_PERSONAS } from "@/lib/personas";
 import type { AgentTask, AgentTaskStatus } from "@/lib/agent-tasks";
 import type { AgentReputation } from "@/lib/reviews";
 import { getReputationColor } from "@/lib/reviews";
@@ -27,7 +29,7 @@ const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
   { value: "timed_out", label: "Timed Out" },
 ];
 
-type Tab = "overview" | "tasks" | "leaderboard" | "personas" | "accounts" | "configure";
+type Tab = "overview" | "tasks" | "leaderboard" | "personas" | "hierarchy" | "accounts" | "configure";
 
 /* --- Status badges --- */
 
@@ -374,7 +376,7 @@ function GettingStarted({ onAgentCreated }: { onAgentCreated: () => void }) {
 function AgentsPageInner() {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
-  const ALL_TABS: Tab[] = ["overview", "tasks", "leaderboard", "personas", "accounts", "configure"];
+  const ALL_TABS: Tab[] = ["overview", "tasks", "leaderboard", "personas", "hierarchy", "accounts", "configure"];
   const initialTab: Tab = ALL_TABS.includes(tabParam as Tab)
     ? (tabParam as Tab)
     : tabParam === "reviewers" ? "leaderboard" : "overview";
@@ -525,6 +527,7 @@ function AgentsPageInner() {
             { value: "tasks" as Tab, label: "Tasks" },
             { value: "leaderboard" as Tab, label: "Leaderboard" },
             { value: "personas" as Tab, label: "Personas" },
+            { value: "hierarchy" as Tab, label: "Hierarchy" },
             { value: "accounts" as Tab, label: "Accounts" },
             { value: "configure" as Tab, label: "Configure" },
           ]).map((t) => (
@@ -622,6 +625,9 @@ function AgentsPageInner() {
 
       {/* Personas tab */}
       {tab === "personas" && <PersonasTab />}
+
+      {/* Hierarchy tab */}
+      {tab === "hierarchy" && <HierarchyTab />}
 
       {/* Accounts tab */}
       {tab === "accounts" && <AccountsTab onAgentCreated={() => setAgentCount((c) => (c ?? 0) + 1)} />}
@@ -903,6 +909,44 @@ function TierBadge({ tier, score }: { tier: string; score: number }) {
     <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium", color, bg)}>
       {score}/100 {tier}
     </span>
+  );
+}
+
+function HierarchyTab() {
+  const [personas, setPersonas] = React.useState<Persona[]>([]);
+  const [loading, setLoading] = React.useState(true);
+
+  React.useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/personas");
+        const data = await res.json();
+        const dbPersonas = (data.personas || []).map((r: Record<string, unknown>) => mapPersona(r));
+        setPersonas([...DEFAULT_PERSONAS, ...dbPersonas]);
+      } catch {
+        setPersonas([...DEFAULT_PERSONAS]);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-16 text-muted-foreground text-sm">
+        Loading hierarchy...
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-medium text-foreground">Agent Hierarchy</h2>
+      </div>
+      <OrgChartPanel personas={personas} />
+    </div>
   );
 }
 
