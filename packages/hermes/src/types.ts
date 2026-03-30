@@ -126,6 +126,21 @@ export type AgentConfig = {
   triggers: string[];
 };
 
+// ── External Channels ──────────────────────────────────────────
+
+/** Channel type identifiers for external data sources. */
+export type ChannelType = "github" | "sentry" | "linear" | "jira" | "competitor";
+
+/** Configuration for a single external channel. */
+export type ChannelConfigEntry = {
+  type: ChannelType;
+  enabled: boolean;
+  /** Channel-specific settings (org names, project keys, targets, etc.). */
+  options: Record<string, unknown>;
+  /** Cache TTL in milliseconds. Default: 300_000 (5 min). */
+  ttlMs: number;
+};
+
 // ── Configuration ───────────────────────────────────────────────
 
 /** Hermes configuration file (.athena/hermes/hermes.yaml). */
@@ -142,6 +157,8 @@ export type HermesConfig = {
   sources: ExternalSource[];
   /** Agents registered in this project for orchestration. */
   agents: AgentConfig[];
+  /** External data channels for live context injection. */
+  channels: ChannelConfigEntry[];
 };
 
 // ── Hooks ───────────────────────────────────────────────────────
@@ -186,6 +203,7 @@ export const DEFAULT_CONFIG: HermesConfig = {
   mode: "whisper",
   sources: [],
   agents: [],
+  channels: [],
 };
 
 /** Human-readable labels for memory block types. */

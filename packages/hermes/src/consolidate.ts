@@ -15,6 +15,7 @@ import {
   saveMemory,
 } from "./memory-store";
 import { findSimilar } from "./semantic";
+import { extractBalancedJson } from "./json-extract";
 
 /** Result of a consolidation pass. */
 export type ConsolidationResult = {
@@ -95,21 +96,26 @@ function mergePair(a: Memory, b: Memory): { keep: Memory; remove: Memory } {
   // Keep the one with higher relevance, or the more recent one
   const aScore = a.relevance + (new Date(a.updatedAt).getTime() / 1e15);
   const bScore = b.relevance + (new Date(b.updatedAt).getTime() / 1e15);
+  const allTags = [...new Set([...a.tags, ...b.tags])];
+  const now = new Date().toISOString();
 
   if (aScore >= bScore) {
-    // Boost the kept memory's relevance slightly
-    a.relevance = Math.min(1, a.relevance + 0.05);
-    a.updatedAt = new Date().toISOString();
-    // Merge tags
-    const allTags = new Set([...a.tags, ...b.tags]);
-    a.tags = [...allTags];
-    return { keep: a, remove: b };
+    // Create new object — never mutate the input
+    const kept: Memory = {
+      ...a,
+      relevance: Math.min(1, a.relevance + 0.05),
+      updatedAt: now,
+      tags: allTags,
+    };
+    return { keep: kept, remove: b };
   } else {
-    b.relevance = Math.min(1, b.relevance + 0.05);
-    b.updatedAt = new Date().toISOString();
-    const allTags = new Set([...a.tags, ...b.tags]);
-    b.tags = [...allTags];
-    return { keep: b, remove: a };
+    const kept: Memory = {
+      ...b,
+      relevance: Math.min(1, b.relevance + 0.05),
+      updatedAt: now,
+      tags: allTags,
+    };
+    return { keep: kept, remove: a };
   }
 }
 
@@ -219,10 +225,10 @@ export async function consolidateWithLLM(
     content: Array<{ type: string; text?: string }>;
   };
   const text = data.content?.[0]?.text ?? "";
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON in LLM response");
+  const jsonStr = extractBalancedJson(text);
+  if (!jsonStr) throw new Error("No JSON in LLM response");
 
-  const parsed = JSON.parse(jsonMatch[0]) as {
+  const parsed = JSON.parse(jsonStr) as {
     consolidated?: Array<{ type: string; content: string; relevance: number }>;
     removed_ids?: string[];
     conflicts?: Array<{ ids: string[]; reason: string }>;

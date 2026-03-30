@@ -1,8 +1,16 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as crypto from "crypto";
 import * as YAML from "yaml";
 import type { HermesConfig, HermesMode, ConversationMap, ConversationThread, SyncState } from "./types";
 import { DEFAULT_CONFIG } from "./types";
+
+/** Atomic write: temp file + rename to prevent corruption from concurrent writes. */
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
 
 // ── Paths ───────────────────────────────────────────────────────
 
@@ -60,6 +68,7 @@ export async function loadConfig(hermesDir: string): Promise<HermesConfig> {
         branch: s.branch ?? "main",
         path: s.path ?? ".athena/hermes/",
       })),
+      tokenBudget: parsed?.token_budget ?? DEFAULT_CONFIG.tokenBudget,
       agents: (parsed?.agents ?? []).map((a: Record<string, unknown>) => ({
         id: String(a.id ?? ""),
         name: String(a.name ?? ""),
@@ -101,7 +110,7 @@ export async function saveConfig(hermesDir: string, config: HermesConfig): Promi
   // SECURITY: Never write API keys to config files (could be committed to git).
   // API keys should be set via ANTHROPIC_API_KEY environment variable only.
   const content = `# Hermes Configuration\n${YAML.stringify(doc)}`;
-  await fs.writeFile(path.join(hermesDir, "hermes.yaml"), content, "utf-8");
+  await atomicWriteFile(path.join(hermesDir, "hermes.yaml"), content);
 }
 
 // ── Conversation Threading ──────────────────────────────────────
@@ -123,7 +132,7 @@ export async function loadConversations(hermesDir: string): Promise<Conversation
 /** Save conversation map to disk. */
 export async function saveConversations(hermesDir: string, map: ConversationMap): Promise<void> {
   await fs.mkdir(hermesDir, { recursive: true });
-  await fs.writeFile(conversationsPath(hermesDir), JSON.stringify(map, null, 2), "utf-8");
+  await atomicWriteFile(conversationsPath(hermesDir), JSON.stringify(map, null, 2));
 }
 
 /** Get or create a conversation thread for a session. */
@@ -192,5 +201,5 @@ export async function loadSyncState(hermesDir: string, sessionId: string): Promi
 export async function saveSyncState(hermesDir: string, state: SyncState): Promise<void> {
   const dir = path.join(hermesDir, "sync");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(syncStatePath(hermesDir, state.sessionId), JSON.stringify(state, null, 2), "utf-8");
+  await atomicWriteFile(syncStatePath(hermesDir, state.sessionId), JSON.stringify(state, null, 2));
 }

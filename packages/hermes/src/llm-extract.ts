@@ -6,6 +6,7 @@
  */
 
 import type { MemoryType } from "./types";
+import { extractBalancedJson } from "./json-extract";
 
 /** Extracted memory from a transcript. */
 export type ExtractedMemory = {
@@ -121,12 +122,12 @@ export async function extractWithLLM(
   const text = data.content?.[0]?.text ?? "";
 
   // Parse the JSON response — handle markdown code fences
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
+  const jsonStr = extractBalancedJson(text);
+  if (!jsonStr) {
     throw new Error("No JSON found in LLM response");
   }
 
-  const parsed = JSON.parse(jsonMatch[0]) as {
+  const parsed = JSON.parse(jsonStr) as {
     memories?: Array<{ type: string; content: string; relevance: number }>;
     summary?: string;
     filesTouched?: string[];

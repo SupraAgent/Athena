@@ -70,6 +70,72 @@ function getLastModified(filePath: string, repoRoot: string): Date | null {
   }
 }
 
+// ── Branch Context Awareness ──────────────────────────────────
+
+/** Get the current git branch name. Returns null if not in a repo. */
+export function getCurrentBranch(repoRoot: string): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+      timeout: 3000,
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Get files changed on the current branch vs main/master. */
+export function getBranchFiles(repoRoot: string): string[] {
+  const branch = getCurrentBranch(repoRoot);
+  if (!branch || branch === "main" || branch === "master") return [];
+
+  // Try main, then master as base
+  for (const base of ["main", "master"]) {
+    try {
+      const output = execFileSync(
+        "git",
+        ["diff", "--name-only", `${base}...${branch}`],
+        {
+          cwd: repoRoot,
+          encoding: "utf-8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"],
+        }
+      ).trim();
+      return output ? output.split("\n").filter(Boolean) : [];
+    } catch {
+      continue;
+    }
+  }
+  return [];
+}
+
+/**
+ * Compute a relevance boost for a memory based on current branch context.
+ * Memories referencing files changed on the current branch get a boost.
+ *
+ * @returns boost value 0-0.2 to add to relevance score
+ */
+export function branchBoost(memory: Memory, branchFiles: string[]): number {
+  if (branchFiles.length === 0) return 0;
+
+  const filePaths = extractFilePaths(memory.content);
+  if (filePaths.length === 0) return 0;
+
+  let matches = 0;
+  for (const fp of filePaths) {
+    if (branchFiles.some((bf) => bf.endsWith(fp) || fp.endsWith(bf))) {
+      matches++;
+    }
+  }
+
+  if (matches === 0) return 0;
+  // Scale: 1 match = 0.1, 2+ = 0.15, 3+ = 0.2
+  return Math.min(0.2, 0.05 + matches * 0.05);
+}
+
 /** Result of an aging pass. */
 export type AgingResult = {
   processed: number;

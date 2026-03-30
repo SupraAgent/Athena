@@ -19,6 +19,7 @@ import {
   deleteMemory,
 } from "./memory-store";
 import { sanitizeContent } from "./sanitize";
+import { extractBalancedJson } from "./json-extract";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -295,10 +296,10 @@ export async function smartConsolidateLLM(
     content: Array<{ type: string; text?: string }>;
   };
   const text = data.content?.[0]?.text ?? "";
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON in LLM response");
+  const jsonStr = extractBalancedJson(text);
+  if (!jsonStr) throw new Error("No JSON in LLM response");
 
-  const parsed = JSON.parse(jsonMatch[0]) as {
+  const parsed = JSON.parse(jsonStr) as {
     decisions?: Array<{
       candidateIndex: number;
       action: string;
