@@ -18,8 +18,9 @@ import {
 } from "./memory-store";
 import { smartConsolidate } from "./mem0-pipeline";
 import { loadConfig, getHermesDir, findRepoRoot, resolveAnthropicKey } from "./config";
-import { queryEvents, listLogDates } from "./event-log";
+import { queryEvents } from "./event-log";
 import { saveScorecard } from "./session-scoring";
+import { applyFeedbackToRelevance } from "./feedback-loop";
 import type { SessionSummary } from "./types";
 
 interface WorkerPayload {
@@ -83,6 +84,18 @@ async function main(): Promise<void> {
     unfinished: result.unfinished,
   };
   await saveSessionSummary(hermesDir, summary);
+
+  // Apply accumulated feedback signals to memory relevance
+  try {
+    const feedback = await applyFeedbackToRelevance(hermesDir);
+    if (feedback.adjusted > 0) {
+      process.stderr.write(
+        `[hermes-worker] Feedback applied: ${feedback.boosted} boosted, ${feedback.decayed} decayed\n`
+      );
+    }
+  } catch {
+    // Non-critical
+  }
 
   // Prune if over limit
   if (config.maxMemories > 0) {

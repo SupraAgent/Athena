@@ -299,6 +299,82 @@ async function handleAge(): Promise<void> {
   }
 }
 
+async function handleEvolve(): Promise<void> {
+  const root = findRepoRoot();
+  const hermesDir = getHermesDir(root);
+  const sid = sessionId();
+
+  // 1. Session trend
+  const { loadScorecards, analyzeTrend, formatTrend } = await import("./session-scoring");
+  const scorecards = await loadScorecards(hermesDir);
+  const trend = analyzeTrend(scorecards);
+  console.log("## Session Trend\n");
+  if (trend) {
+    console.log(formatTrend(trend));
+  } else {
+    console.log(`Only ${scorecards.length} session(s) recorded. Need 3+ for trend analysis.`);
+  }
+
+  // 2. Graduation candidates
+  const { findGraduationCandidates, formatCandidates } = await import("./graduation");
+  const gradResult = await findGraduationCandidates(hermesDir, sid);
+  console.log("\n## Graduation Review\n");
+  const candidateBlock = formatCandidates(gradResult);
+  if (candidateBlock) {
+    console.log(candidateBlock);
+  } else {
+    console.log("No graduation candidates at this time.");
+  }
+
+  // 3. Verification summary
+  const memories = await loadMemories(hermesDir);
+  const withVerify = memories.filter((m) => m.verify);
+  const withoutVerify = memories.filter(
+    (m) => ["guidance", "decision", "pattern"].includes(m.type) && !m.verify
+  );
+  console.log("\n## Verification Coverage\n");
+  console.log(`Memories with verify checks: ${withVerify.length}`);
+  console.log(`Rule-type memories without verify: ${withoutVerify.length}`);
+  if (withoutVerify.length > 0) {
+    console.log("\nMemories that could benefit from a verify check:");
+    for (const m of withoutVerify.slice(0, 5)) {
+      console.log(`  - [${m.id}] ${m.content.slice(0, 80)}`);
+    }
+    if (withoutVerify.length > 5) {
+      console.log(`  ... and ${withoutVerify.length - 5} more`);
+    }
+  }
+
+  // 4. Correction patterns
+  const corrections = memories.filter(
+    (m) => m.type === "guidance" && m.tags.includes("correction")
+  );
+  const confirmed = corrections.filter((m) => m.confidence === "confirmed");
+  const observed = corrections.filter((m) => m.confidence === "observed" || !m.confidence);
+  console.log("\n## Correction Patterns\n");
+  console.log(`Total corrections: ${corrections.length} (${confirmed.length} confirmed, ${observed.length} observed)`);
+  if (corrections.length > 0) {
+    console.log("\nRecent corrections:");
+    for (const m of corrections.slice(-5)) {
+      const badge = m.confidence === "confirmed" ? "✓" : "○";
+      const count = m.correctionCount ?? 0;
+      console.log(`  ${badge} [${count}x] ${m.content.slice(0, 80)}`);
+    }
+  }
+
+  // 5. Feedback summary
+  const { getFeedbackSummary } = await import("./feedback-loop");
+  const fb = await getFeedbackSummary(hermesDir);
+  if (fb.totalSignals > 0) {
+    console.log("\n## Feedback Summary\n");
+    console.log(`Total signals: ${fb.totalSignals}, avg score: ${fb.averageScore.toFixed(1)}`);
+  }
+
+  console.log("\n---");
+  console.log("To graduate a candidate: update its confidence to 'graduated' and add the rule to CLAUDE.md or .claude/rules/.");
+  console.log("To reject a candidate: run `hermes forget <id>` or use /hermes-forget.");
+}
+
 function timeAgo(timestamp: string): string {
   const seconds = Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000);
   if (seconds < 60) return "just now";
@@ -335,6 +411,7 @@ async function main(): Promise<void> {
       "  mode [mode]      Get/set operational mode\n" +
       "  consolidate      Merge redundant memories\n" +
       "  age              Run git-aware memory aging\n" +
+      "  evolve           Review trends, corrections, graduation candidates\n" +
       "  status           Show Hermes status\n"
     );
     process.exit(1);
@@ -360,6 +437,8 @@ async function main(): Promise<void> {
       return handleConsolidate();
     case "age":
       return handleAge();
+    case "evolve":
+      return handleEvolve();
     case "status":
       return handleStatus();
   }

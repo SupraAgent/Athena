@@ -307,6 +307,7 @@ export {
   LinearChannel,
   JiraChannel,
   CompetitorChannel,
+  LocalTasksChannel,
   getDefaultRegistry,
   checkAll as checkAllChannels,
   fetchAll as fetchAllChannels,
