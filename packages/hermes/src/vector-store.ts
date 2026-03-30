@@ -21,8 +21,8 @@ export type VectorSearchResult = {
 };
 
 export type VectorStore = {
-  /** Backend in use: "chroma" or "tfidf". */
-  backend: "chroma" | "tfidf";
+  /** Backend in use: "chroma" | "tfidf" | "anthropic". */
+  backend: "chroma" | "tfidf" | "anthropic";
   /** Upsert memories into the store. */
   upsert: (memories: Memory[]) => Promise<void>;
   /** Search by query text. */
@@ -169,11 +169,169 @@ async function createChromaStore(hermesDir: string): Promise<VectorStore | null>
   }
 }
 
+// ── Anthropic Embeddings Adapter ──────────────────────────────
+
+/**
+ * Create a vector store backed by Anthropic's embedding API.
+ * Requires ANTHROPIC_API_KEY env var or config.anthropicApiKey.
+ *
+ * Uses voyage-3 model via Anthropic's partner embedding endpoint.
+ * Falls back to TF-IDF if the API key is not set or requests fail.
+ */
+async function createAnthropicStore(apiKey: string): Promise<VectorStore | null> {
+  if (!apiKey) return null;
+
+  const EMBEDDING_MODEL = "voyage-3";
+  const EMBEDDING_ENDPOINT = "https://api.voyageai.com/v1/embeddings";
+
+  // In-memory embedding cache
+  const embeddingCache = new Map<string, number[]>();
+  let _memories: Memory[] = [];
+
+  async function getEmbeddings(texts: string[]): Promise<number[][]> {
+    // Check cache first, only request uncached
+    const uncachedIndices: number[] = [];
+    const uncachedTexts: string[] = [];
+    const results: (number[] | null)[] = texts.map((t) => {
+      const cached = embeddingCache.get(t);
+      return cached ?? null;
+    });
+
+    for (let i = 0; i < texts.length; i++) {
+      if (!results[i]) {
+        uncachedIndices.push(i);
+        uncachedTexts.push(texts[i]);
+      }
+    }
+
+    if (uncachedTexts.length > 0) {
+      // Batch in chunks of 128 (API limit)
+      for (let start = 0; start < uncachedTexts.length; start += 128) {
+        const batch = uncachedTexts.slice(start, start + 128);
+        try {
+          const resp = await fetch(EMBEDDING_ENDPOINT, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: EMBEDDING_MODEL,
+              input: batch,
+              input_type: "document",
+            }),
+          });
+
+          if (!resp.ok) return [];
+
+          const data = (await resp.json()) as {
+            data: { embedding: number[] }[];
+          };
+
+          for (let j = 0; j < data.data.length; j++) {
+            const globalIdx = uncachedIndices[start + j];
+            const embedding = data.data[j].embedding;
+            results[globalIdx] = embedding;
+            embeddingCache.set(texts[globalIdx], embedding);
+          }
+        } catch {
+          return [];
+        }
+      }
+    }
+
+    return results.filter((r): r is number[] => r !== null);
+  }
+
+  function dotProduct(a: number[], b: number[]): number {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
+    return sum;
+  }
+
+  function magnitude(v: number[]): number {
+    return Math.sqrt(v.reduce((sum, val) => sum + val * val, 0));
+  }
+
+  function cosine(a: number[], b: number[]): number {
+    const denom = magnitude(a) * magnitude(b);
+    return denom === 0 ? 0 : dotProduct(a, b) / denom;
+  }
+
+  // Verify API access with a tiny test
+  try {
+    const test = await getEmbeddings(["test"]);
+    if (test.length === 0) return null;
+  } catch {
+    return null;
+  }
+
+  return {
+    backend: "anthropic",
+
+    async upsert(memories: Memory[]) {
+      _memories = memories;
+      if (memories.length === 0) return;
+      const texts = memories.map((m) => `${m.type}: ${m.content}`);
+      await getEmbeddings(texts);
+    },
+
+    async query(text: string, limit = 10): Promise<VectorSearchResult[]> {
+      const queryEmb = await getEmbeddings([text]);
+      if (queryEmb.length === 0) return [];
+
+      const memTexts = _memories.map((m) => `${m.type}: ${m.content}`);
+      const memEmbs = await getEmbeddings(memTexts);
+      if (memEmbs.length !== _memories.length) return [];
+
+      const scored = _memories.map((m, i) => ({
+        memory: m,
+        score: cosine(queryEmb[0], memEmbs[i]),
+      }));
+
+      return scored
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .filter((s) => s.score > 0);
+    },
+
+    async similar(target: Memory, threshold = 0.6): Promise<Memory[]> {
+      const targetEmb = await getEmbeddings([`${target.type}: ${target.content}`]);
+      if (targetEmb.length === 0) return [];
+
+      const memTexts = _memories.map((m) => `${m.type}: ${m.content}`);
+      const memEmbs = await getEmbeddings(memTexts);
+      if (memEmbs.length !== _memories.length) return [];
+
+      return _memories
+        .map((m, i) => ({ memory: m, score: cosine(targetEmb[0], memEmbs[i]) }))
+        .filter((s) => s.score >= threshold && s.memory.id !== target.id)
+        .sort((a, b) => b.score - a.score)
+        .map((s) => s.memory);
+    },
+  };
+}
+
 // ── Factory ────────────────────────────────────────────────────
 
-/** Create a vector store — uses Chroma if available, TF-IDF otherwise. */
+/**
+ * Create a vector store — priority: Anthropic embeddings > Chroma > TF-IDF.
+ *
+ * Set VOYAGE_API_KEY env var to use Anthropic/Voyage embeddings.
+ * Install chromadb to use Chroma. Otherwise falls back to BM25/TF-IDF.
+ */
 export async function createVectorStore(hermesDir: string): Promise<VectorStore> {
+  // Try Anthropic/Voyage embeddings first
+  const voyageKey = process.env.VOYAGE_API_KEY;
+  if (voyageKey) {
+    const anthropic = await createAnthropicStore(voyageKey);
+    if (anthropic) return anthropic;
+  }
+
+  // Then try Chroma
   const chroma = await createChromaStore(hermesDir);
   if (chroma) return chroma;
+
+  // Default: TF-IDF/BM25
   return createTfIdfStore();
 }

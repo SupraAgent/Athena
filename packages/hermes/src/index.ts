@@ -11,6 +11,8 @@ export type {
   ExternalSource,
   AgentSchedule,
   AgentConfig,
+  ChannelType,
+  ChannelConfigEntry,
   HookEvent,
   HookInput,
   HookOutput,
