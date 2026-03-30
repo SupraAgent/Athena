@@ -11,6 +11,12 @@ export type NavGroup = {
 
 export const NAV_GROUPS: NavGroup[] = [
   {
+    title: "HOME",
+    items: [
+      { label: "Dashboard", href: "/", icon: "📋" },
+    ],
+  },
+  {
     title: "BUILD",
     items: [
       { label: "Workflow Builder", href: "/builder", icon: "🧩" },

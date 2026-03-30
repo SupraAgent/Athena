@@ -163,14 +163,15 @@ describe("channel cache", () => {
 // ── Registry ───────────────────────────────────────────────────
 
 describe("getDefaultRegistry", () => {
-  it("returns all 5 channel types", () => {
+  it("returns all 6 channel types", () => {
     const registry = getDefaultRegistry();
-    expect(registry.size).toBe(5);
+    expect(registry.size).toBe(6);
     expect(registry.has("github")).toBe(true);
     expect(registry.has("sentry")).toBe(true);
     expect(registry.has("linear")).toBe(true);
     expect(registry.has("jira")).toBe(true);
     expect(registry.has("competitor")).toBe(true);
+    expect(registry.has("local-tasks")).toBe(true);
   });
 });
 

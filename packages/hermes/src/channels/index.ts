@@ -20,6 +20,7 @@ export { SentryChannel } from "./sentry";
 export { LinearChannel } from "./linear";
 export { JiraChannel } from "./jira";
 export { CompetitorChannel } from "./competitor";
+export { LocalTasksChannel } from "./local-tasks";
 
 // Manager
 export {

@@ -8,7 +8,7 @@
 
 // ── Channel Types ──────────────────────────────────────────────
 
-export type ChannelType = "github" | "sentry" | "linear" | "jira" | "competitor";
+export type ChannelType = "github" | "sentry" | "linear" | "jira" | "competitor" | "local-tasks";
 
 export type ChannelStatus = "available" | "unavailable" | "auth-missing" | "error";
 

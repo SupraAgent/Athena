@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { TaskDashboard } from "@/components/tasks/task-dashboard";
 
 export default function HomePage() {
-  redirect("/builder");
+  return <TaskDashboard />;
 }

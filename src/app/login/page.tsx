@@ -16,6 +16,7 @@ export default function LoginPage() {
 function LoginForm() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = React.useState(false);
+  const [devPassword, setDevPassword] = React.useState("");
   const [error, setError] = React.useState<string | null>(
     searchParams.get("error") ? "Authentication failed. Please try again." : null
   );
@@ -50,6 +51,16 @@ function LoginForm() {
     }
   }
 
+  function handleDevLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (devPassword === "dev") {
+      document.cookie = "athena-dev-auth=authenticated; path=/; max-age=86400; SameSite=Lax";
+      window.location.href = next;
+    } else {
+      setError("Invalid dev password.");
+    }
+  }
+
   return (
     <div className="flex min-h-dvh items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-8 text-center">
@@ -81,6 +92,28 @@ function LoginForm() {
           </svg>
           {loading ? "Redirecting..." : "Sign in with GitHub"}
         </Button>
+
+        <div className="relative">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-white/10" />
+          </div>
+          <div className="relative flex justify-center text-xs">
+            <span className="bg-background px-2 text-muted-foreground">or</span>
+          </div>
+        </div>
+
+        <form onSubmit={handleDevLogin} className="space-y-3">
+          <input
+            type="password"
+            value={devPassword}
+            onChange={(e) => setDevPassword(e.target.value)}
+            placeholder="Dev password"
+            className="h-10 w-full rounded-xl border border-white/10 bg-white/5 px-3 text-sm text-foreground placeholder:text-muted-foreground outline-none transition hover:border-white/15 focus:border-primary/40 focus:ring-2 focus:ring-primary/15 text-center"
+          />
+          <Button type="submit" variant="secondary" className="w-full">
+            Dev Login
+          </Button>
+        </form>
 
         <p className="text-xs text-muted-foreground">
           Sign in with GitHub to connect your repos and start improving.
