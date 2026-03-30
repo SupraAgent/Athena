@@ -1,90 +1,17 @@
-import type { HookOutput, SessionSummary } from "../types";
-import {
-  loadMemories,
-  createMemory,
-  saveSessionSummary,
-  deduplicateMemories,
-  pruneMemories,
-} from "../memory-store";
-import { loadConfig, getHermesDir, findRepoRoot } from "../config";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as os from "os";
+import { spawn } from "child_process";
+import type { HookOutput } from "../types";
+import { loadConfig, getHermesDir, findRepoRoot, resolveMode } from "../config";
 
-/** Pattern sources — fresh RegExp instances created per call to avoid lastIndex state. */
-const FACT_PATTERN_SOURCES = [
-  "(?:this (?:project|repo|codebase) (?:uses?|has|runs?))\\s+(.+?)(?:\\.|$)",
-  "(?:we (?:chose|decided|switched to|use|are using))\\s+(.+?)(?:\\.|$)",
-  "(?:the (?:deploy|build|test) (?:target|command|process) is)\\s+(.+?)(?:\\.|$)",
-  "(?:important|note|remember):\\s*(.+?)(?:\\.|$)",
-];
-
-const DECISION_PATTERN_SOURCES = [
-  "(?:decided to|decision:|we (?:will|should|chose to))\\s+(.+?)(?:\\.|$)",
-  "(?:architectural (?:decision|choice)|design decision):\\s*(.+?)(?:\\.|$)",
-  "(?:going with|opted for|picking)\\s+(.+?)(?:\\s+(?:because|since|over))",
-];
-
-const FILE_PATTERN_SOURCE =
-  "(?:(?:created?|modif(?:ied|y)|edit(?:ed)?|updat(?:ed)?|delet(?:ed)?|wrote?|fix(?:ed)?)\\s+)([`\"']?[\\w/.@-]+/[\\w/.@-]+\\.[a-zA-Z]{1,10}[`\"']?)";
-
-/** Extract memories from a session transcript using heuristics. */
-function extractFromTranscript(transcript: string): {
-  facts: string[];
-  decisions: string[];
-  files: string[];
-} {
-  const facts: string[] = [];
-  const decisions: string[] = [];
-  const files: string[] = [];
-
-  for (const src of FACT_PATTERN_SOURCES) {
-    const pattern = new RegExp(src, "gi");
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(transcript)) !== null) {
-      const fact = match[1].trim();
-      if (fact.length > 10 && fact.length < 300) {
-        facts.push(fact);
-      }
-    }
-  }
-
-  for (const src of DECISION_PATTERN_SOURCES) {
-    const pattern = new RegExp(src, "gi");
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(transcript)) !== null) {
-      const decision = match[1].trim();
-      if (decision.length > 10 && decision.length < 300) {
-        decisions.push(decision);
-      }
-    }
-  }
-
-  // File pattern requires a "/" to avoid matching method calls like Date.now()
-  const filePattern = new RegExp(FILE_PATTERN_SOURCE, "gi");
-  let fileMatch: RegExpExecArray | null;
-  while ((fileMatch = filePattern.exec(transcript)) !== null) {
-    const filePath = fileMatch[1].replace(/[`"']/g, "");
-    if (filePath.includes("/")) {
-      files.push(filePath);
-    }
-  }
-
-  return {
-    facts: [...new Set(facts)],
-    decisions: [...new Set(decisions)],
-    files: [...new Set(files)],
-  };
-}
-
-/** Generate a brief summary from the transcript — prefers the final lines (conclusion). */
-function generateSummary(transcript: string, maxLen = 200): string {
-  const lines = transcript.split("\n").filter((l) => l.trim().length > 20);
-  if (lines.length === 0) return "Session with no extractable summary.";
-  // Take the last 5 meaningful lines (conclusion > intro)
-  const tail = lines.slice(-5);
-  const combined = tail.join(" ").trim();
-  return combined.length > maxLen ? combined.slice(0, maxLen - 3) + "..." : combined;
-}
-
-/** Stop hook: extract and persist memories from the session. */
+/**
+ * Stop hook: dispatch transcript processing to a detached background worker.
+ *
+ * Writes the payload to a temp file and spawns a detached worker process
+ * that handles LLM extraction and memory persistence. The hook itself
+ * exits immediately so Claude Code is never blocked.
+ */
 export async function onStop(
   sid: string,
   transcript: string,
@@ -94,54 +21,65 @@ export async function onStop(
   const root = repoRoot ?? findRepoRoot();
   const hermesDir = getHermesDir(root);
   const config = await loadConfig(hermesDir);
+  const mode = resolveMode(config);
 
-  if (!config.autoExtract || !transcript.trim()) {
+  if (mode === "off" || !config.autoExtract || !transcript.trim()) {
     return { context: "", memoriesSaved: 0 };
   }
 
-  const existing = await loadMemories(hermesDir);
-  const { facts, decisions, files } = extractFromTranscript(transcript);
-  let saved = 0;
+  // Write payload to a temp file for the worker
+  const tmpDir = path.join(os.tmpdir(), `hermes-${process.getuid?.() ?? "0"}`);
+  await fs.mkdir(tmpDir, { recursive: true });
+  const payloadPath = path.join(tmpDir, `stop-${sid}-${Date.now()}.json`);
 
-  // Helper: check dedup and track newly created memories
-  async function saveIfNew(type: "fact" | "decision", content: string, relevance: number) {
-    const candidate = {
-      id: "", type, content, tags: [] as string[],
-      createdAt: "", updatedAt: "", source: sid, relevance,
-    };
-    if (!deduplicateMemories(existing, candidate)) {
-      const created = await createMemory(hermesDir, type, content, [], sid, relevance);
-      existing.push(created); // Update snapshot to prevent within-loop duplicates
-      saved++;
-    }
-  }
-
-  // Save extracted facts
-  for (const fact of facts.slice(0, 5)) {
-    await saveIfNew("fact", fact, 0.6);
-  }
-
-  // Save extracted decisions
-  for (const decision of decisions.slice(0, 3)) {
-    await saveIfNew("decision", decision, 0.8);
-  }
-
-  // Save session summary
-  const summary: SessionSummary = {
+  const payload = {
     sessionId: sid,
+    transcript,
     startedAt,
-    endedAt: new Date().toISOString(),
-    summary: generateSummary(transcript),
-    filesTouched: files.slice(0, 20),
-    decisionsMade: decisions.slice(0, 5),
-    unfinished: [],
+    repoRoot: root,
   };
-  await saveSessionSummary(hermesDir, summary);
 
-  // Prune if over limit
-  if (config.maxMemories > 0) {
-    await pruneMemories(hermesDir, config.maxMemories);
+  await fs.writeFile(payloadPath, JSON.stringify(payload), { encoding: "utf-8", mode: 0o600 });
+
+  // Spawn detached background worker
+  const workerPath = path.join(__dirname, "stop-worker.js");
+
+  try {
+    const child = spawn("node", [workerPath, payloadPath], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env },
+    });
+    child.unref();
+  } catch {
+    // If spawn fails, fall back to inline processing
+    const { extractMemories } = await import("../llm-extract");
+    const { resolveAnthropicKey } = await import("../config");
+    const { saveSessionSummary, pruneMemories } = await import("../memory-store");
+    const { smartConsolidate } = await import("../mem0-pipeline");
+
+    const apiKey = resolveAnthropicKey(config);
+    const result = await extractMemories(transcript, apiKey);
+    const pipeline = await smartConsolidate(hermesDir, result.memories, sid, apiKey);
+    const saved = pipeline.added + pipeline.updated;
+
+    await saveSessionSummary(hermesDir, {
+      sessionId: sid,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      summary: result.summary,
+      filesTouched: result.filesTouched.slice(0, 20),
+      decisionsMade: result.memories.filter((m) => m.type === "decision").map((m) => m.content),
+      unfinished: result.unfinished,
+    });
+
+    if (config.maxMemories > 0) {
+      await pruneMemories(hermesDir, config.maxMemories);
+    }
+
+    return { context: "", memoriesSaved: saved };
   }
 
-  return { context: "", memoriesSaved: saved };
+  // Worker spawned successfully — exit immediately
+  return { context: "", memoriesSaved: 0 };
 }

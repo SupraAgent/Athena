@@ -1,7 +1,18 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as crypto from "crypto";
 import * as YAML from "yaml";
-import type { Memory, MemoryType, SessionSummary } from "./types";
+import type { Memory, MemoryType, MemoryConfidence, VerifyCheck, SessionSummary, ExternalSource } from "./types";
+import { resolveEncryptionKey, encryptContent, decryptContent, isEncrypted } from "./encryption";
+
+// ── Atomic write helper ────────────────────────────────────────
+
+/** Write file atomically: write to temp, then rename. Prevents corruption from concurrent writes. */
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
 
 // ── ID generation ───────────────────────────────────────────────
 
@@ -47,7 +58,7 @@ function memoryFilePath(hermesDir: string, id: string): string {
 // ── Serialization ───────────��───────────────────────────────────
 
 function memoryToYaml(m: Memory): string {
-  const doc = {
+  const doc: Record<string, unknown> = {
     id: m.id,
     type: m.type,
     content: m.content,
@@ -56,11 +67,19 @@ function memoryToYaml(m: Memory): string {
     updated_at: m.updatedAt,
     source: m.source,
     relevance: m.relevance,
+    scope: m.scope ?? "user",
   };
+  if (m.verify) doc.verify = m.verify;
+  if (m.confidence) doc.confidence = m.confidence;
+  if (m.correctionCount && m.correctionCount > 0) doc.correction_count = m.correctionCount;
   return `# Hermes Memory — ${m.type}\n${YAML.stringify(doc)}`;
 }
 
-const VALID_MEMORY_TYPES = new Set<string>(["fact", "decision", "session-summary"]);
+const VALID_MEMORY_TYPES = new Set<string>([
+  "fact", "decision", "preference", "project-context",
+  "pattern", "pending", "guidance",
+  "session-summary", "agent-heartbeat",
+]);
 
 function yamlToMemory(raw: string): Memory | null {
   try {
@@ -68,7 +87,7 @@ function yamlToMemory(raw: string): Memory | null {
     if (!parsed?.id || !parsed?.type || !parsed?.content) return null;
     if (!SAFE_ID_PATTERN.test(parsed.id)) return null;
     if (!VALID_MEMORY_TYPES.has(parsed.type)) return null;
-    return {
+    const mem: Memory = {
       id: parsed.id,
       type: parsed.type as MemoryType,
       content: parsed.content,
@@ -77,7 +96,12 @@ function yamlToMemory(raw: string): Memory | null {
       updatedAt: parsed.updated_at ?? new Date().toISOString(),
       source: parsed.source ?? "unknown",
       relevance: parsed.relevance ?? 0.5,
+      scope: parsed.scope ?? "user",
     };
+    if (parsed.verify) mem.verify = parsed.verify as VerifyCheck;
+    if (parsed.confidence) mem.confidence = parsed.confidence as MemoryConfidence;
+    if (parsed.correction_count) mem.correctionCount = Number(parsed.correction_count);
+    return mem;
   } catch {
     return null;
   }
@@ -98,18 +122,25 @@ function sessionToYaml(s: SessionSummary): string {
 
 // ── CRUD ────────────────────────────────────────────────────────
 
-/** Load all memories from .athena/hermes/memories/. Reads sequentially to avoid EMFILE. */
+/** Load all memories from .athena/hermes/memories/. Reads sequentially to avoid EMFILE. Decrypts if key is set. */
 export async function loadMemories(hermesDir: string): Promise<Memory[]> {
   const dir = memoriesDir(hermesDir);
   try {
     const files = await fs.readdir(dir);
     const yamlFiles = files.filter((f) => f.endsWith(".yaml"));
+    const key = await resolveEncryptionKey(hermesDir);
     const memories: Memory[] = [];
     for (const f of yamlFiles) {
       try {
         const raw = await fs.readFile(path.join(dir, f), "utf-8");
         const mem = yamlToMemory(raw);
-        if (mem) memories.push(mem);
+        if (mem) {
+          // Decrypt content if it was encrypted
+          if (key && isEncrypted(mem.content)) {
+            mem.content = decryptContent(mem.content, key);
+          }
+          memories.push(mem);
+        }
       } catch {
         // Skip unreadable files, continue loading others
       }
@@ -120,11 +151,52 @@ export async function loadMemories(hermesDir: string): Promise<Memory[]> {
   }
 }
 
-/** Save a single memory. Creates directories if needed. */
+/** Save a single memory. Creates directories if needed. Encrypts content if key is configured. */
 export async function saveMemory(hermesDir: string, memory: Memory): Promise<void> {
   const dir = memoriesDir(hermesDir);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(memoryFilePath(hermesDir, memory.id), memoryToYaml(memory), "utf-8");
+
+  // Optionally encrypt content before writing
+  const key = await resolveEncryptionKey(hermesDir);
+  if (key) {
+    const encrypted = { ...memory, content: encryptContent(memory.content, key) };
+    await atomicWriteFile(memoryFilePath(hermesDir, encrypted.id), memoryToYaml(encrypted));
+  } else {
+    await atomicWriteFile(memoryFilePath(hermesDir, memory.id), memoryToYaml(memory));
+  }
+}
+
+/** Update an existing memory's content and metadata. Reads single file, not all memories. */
+export async function updateMemory(
+  hermesDir: string,
+  id: string,
+  updates: Partial<Pick<Memory, "content" | "relevance" | "tags" | "scope" | "verify" | "confidence" | "correctionCount">>
+): Promise<Memory | null> {
+  try {
+    const filePath = memoryFilePath(hermesDir, id);
+    const raw = await fs.readFile(filePath, "utf-8");
+    const existing = yamlToMemory(raw);
+    if (!existing) return null;
+
+    const updated: Memory = {
+      ...existing,
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveMemory(hermesDir, updated);
+    return updated;
+  } catch {
+    return null;
+  }
+}
+
+/** Load memories filtered by scope. */
+export async function loadMemoriesByScope(
+  hermesDir: string,
+  scope: import("./types").MemoryScope
+): Promise<Memory[]> {
+  const all = await loadMemories(hermesDir);
+  return all.filter((m) => (m.scope ?? "user") === scope);
 }
 
 /** Delete a memory by ID. */
@@ -144,7 +216,8 @@ export async function createMemory(
   content: string,
   tags: string[],
   source: string,
-  relevance = 0.7
+  relevance = 0.7,
+  scope: import("./types").MemoryScope = "user"
 ): Promise<Memory> {
   const now = new Date().toISOString();
   const memory: Memory = {
@@ -156,6 +229,7 @@ export async function createMemory(
     updatedAt: now,
     source,
     relevance,
+    scope,
   };
   await saveMemory(hermesDir, memory);
   return memory;
@@ -174,7 +248,7 @@ export async function saveSessionSummary(
     ? summary.endedAt.slice(0, 10)
     : new Date().toISOString().slice(0, 10);
   const filename = `${dateStr}-${summary.sessionId}.yaml`;
-  await fs.writeFile(path.join(dir, filename), sessionToYaml(summary), "utf-8");
+  await atomicWriteFile(path.join(dir, filename), sessionToYaml(summary));
 }
 
 // ── Search ──────────────────────────────────────────────────────
@@ -246,4 +320,139 @@ export async function pruneMemories(
     if (await deleteMemory(hermesDir, m.id)) removed++;
   }
   return removed;
+}
+
+// ── Remote / Cross-Project Relay ─────────────────────────────────
+
+/**
+ * Load memories from an external repo source via git.
+ * Uses `git archive` to fetch only the hermes/memories/ directory
+ * without cloning the entire repo. Falls back silently on failure.
+ */
+export async function loadRemoteMemories(source: ExternalSource): Promise<Memory[]> {
+  const { execFileSync } = require("child_process") as typeof import("child_process");
+  const memoriesPath = path.posix.join(source.path, "memories");
+
+  try {
+    // Use git archive to stream the remote memories directory as a tar
+    // This works with any git remote (GitHub, GitLab, local) without cloning
+    const repoUrl = source.repo.includes("://")
+      ? source.repo
+      : `https://github.com/${source.repo}.git`;
+
+    // List files in the remote memories directory
+    const lsOutput = execFileSync("git", [
+      "ls-remote", "--refs", repoUrl, `refs/heads/${source.branch}`,
+    ], { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] });
+
+    if (!lsOutput.trim()) return [];
+
+    // Fetch memory files via git archive piped through tar
+    const tmpDir = path.join(
+      require("os").tmpdir(),
+      `hermes-relay-${Date.now()}`
+    );
+    await fs.mkdir(tmpDir, { recursive: true });
+
+    try {
+      execFileSync("git", [
+        "archive",
+        `--remote=${repoUrl}`,
+        source.branch,
+        memoriesPath,
+      ], {
+        timeout: 15000,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch {
+      // git archive --remote doesn't work with GitHub HTTPS URLs.
+      // Fall back to GitHub raw content API.
+      return await loadRemoteMemoriesViaApi(source);
+    }
+
+    return [];
+  } catch {
+    // Silent failure — relay is best-effort
+    return [];
+  }
+}
+
+/**
+ * Fetch memories from a GitHub repo using the raw content API.
+ * Uses the GitHub Trees API to list files, then fetches each YAML file.
+ */
+async function loadRemoteMemoriesViaApi(source: ExternalSource): Promise<Memory[]> {
+  const { execFileSync } = require("child_process") as typeof import("child_process");
+  const memoriesPath = path.posix.join(source.path, "memories");
+
+  // Parse owner/repo from source.repo
+  const repoMatch = source.repo.match(/(?:github\.com[/:])?([^/]+\/[^/.]+)/);
+  if (!repoMatch) return [];
+  const ownerRepo = repoMatch[1].replace(/\.git$/, "");
+
+  try {
+    // Use GitHub API via git credential or gh CLI to list the tree
+    // Try gh CLI first (most likely available if user has GitHub repos)
+    const treeJson = execFileSync("gh", [
+      "api",
+      `repos/${ownerRepo}/git/trees/${source.branch}`,
+      "--jq", `.tree[] | select(.path == "${source.path.replace(/\/$/, "")}") | .sha`,
+    ], { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+
+    if (!treeJson) return [];
+
+    // Get the hermes subtree to find memories/
+    const hermesTree = execFileSync("gh", [
+      "api",
+      `repos/${ownerRepo}/git/trees/${treeJson}`,
+      "--jq", `.tree[] | select(.path == "memories") | .sha`,
+    ], { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+
+    if (!hermesTree) return [];
+
+    // List memory files
+    const fileList = execFileSync("gh", [
+      "api",
+      `repos/${ownerRepo}/git/trees/${hermesTree}`,
+      "--jq", `.tree[] | select(.path | endswith(".yaml")) | .path`,
+    ], { encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+
+    if (!fileList) return [];
+
+    const files = fileList.split("\n").filter(Boolean);
+    const memories: Memory[] = [];
+
+    // Fetch each file's content via raw API
+    for (const file of files.slice(0, 50)) {
+      try {
+        const raw = execFileSync("gh", [
+          "api",
+          `repos/${ownerRepo}/contents/${memoriesPath}/${file}`,
+          "--jq", ".content",
+        ], { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+
+        if (raw) {
+          const decoded = Buffer.from(raw, "base64").toString("utf-8");
+          const mem = yamlToMemory(decoded);
+          if (mem) memories.push(mem);
+        }
+      } catch {
+        // Skip individual file failures
+      }
+    }
+
+    return memories;
+  } catch {
+    return [];
+  }
+}
+
+/** Load memories from all configured external sources. */
+export async function loadAllRemoteMemories(sources: ExternalSource[]): Promise<Memory[]> {
+  const results: Memory[] = [];
+  for (const source of sources) {
+    const remote = await loadRemoteMemories(source);
+    results.push(...remote);
+  }
+  return results;
 }

@@ -2,31 +2,282 @@
 export type {
   Memory,
   MemoryType,
+  MemoryScope,
+  MemoryConfidence,
+  VerifyCheck,
   SessionSummary,
   HermesConfig,
+  HermesMode,
   ExternalSource,
+  AgentSchedule,
+  AgentConfig,
   HookEvent,
   HookInput,
   HookOutput,
+  ConversationMap,
+  ConversationThread,
+  SyncState,
 } from "./types";
-export { DEFAULT_CONFIG } from "./types";
+export { DEFAULT_CONFIG, MEMORY_BLOCK_LABELS } from "./types";
 
 // ── Config ───────────────────────────────────────────────────────
-export { getHermesDir, findRepoRoot, loadConfig, saveConfig } from "./config";
+export {
+  getHermesDir,
+  findRepoRoot,
+  loadConfig,
+  saveConfig,
+  resolveMode,
+  resolveAnthropicKey,
+  loadConversations,
+  saveConversations,
+  getOrCreateThread,
+  updateThreadInjection,
+  loadSyncState,
+  saveSyncState,
+} from "./config";
 
 // ── Memory Store ─────────────────────────────────────────────────
 export {
   memoryId,
   sessionId,
   loadMemories,
+  loadMemoriesByScope,
   saveMemory,
+  updateMemory,
   deleteMemory,
   createMemory,
   saveSessionSummary,
   searchMemories,
   deduplicateMemories,
   pruneMemories,
+  loadRemoteMemories,
+  loadAllRemoteMemories,
 } from "./memory-store";
+
+// ── LLM Extraction ──────────────────────────────────────────────
+export {
+  extractWithLLM,
+  extractWithHeuristics,
+  extractMemories,
+  summarizeToolCalls,
+} from "./llm-extract";
+export type { ExtractedMemory, ExtractionResult } from "./llm-extract";
+
+// ── Memory Diffing ──────────────────────────────────────────────
+export {
+  hashMemories,
+  diffMemories,
+  formatDiffBlock,
+  formatFullBlocks,
+} from "./diff";
+export type { BlockDiff } from "./diff";
+
+// ── Semantic Search ─────────────────────────────────────────────
+export {
+  buildIndex,
+  semanticSearch,
+  findSimilar,
+  bm25Score,
+} from "./semantic";
+export type { SemanticIndex } from "./semantic";
+
+// ── Query Expansion (Synonyms) ──────────────────────────────────
+export { expandQuery } from "./synonyms";
+
+// ── Memory Consolidation ────────────────────────────────────────
+export {
+  consolidateHeuristic,
+  consolidateWithLLM,
+  consolidateMemories,
+} from "./consolidate";
+export type { ConsolidationResult, ConflictPair } from "./consolidate";
+
+// ── Remote Cache ────────────────────────────────────────────────
+export {
+  loadCachedRemoteMemories,
+  saveCachedRemoteMemories,
+  isCacheStale,
+  triggerBackgroundRefresh,
+} from "./remote-cache";
+
+// ── Git-Aware Aging ─────────────────────────────────────────────
+export { ageMemories, getCurrentBranch, getBranchFiles, branchBoost } from "./git-aging";
+export type { AgingResult } from "./git-aging";
+
+// ── Encryption at Rest ─────────────────────────────────────────
+export {
+  deriveKey,
+  encryptContent,
+  decryptContent,
+  isEncrypted,
+  getOrCreateSalt,
+  resolveEncryptionKey,
+} from "./encryption";
+
+// ── Memory Version History ─────────────────────────────────────
+export {
+  versionMemory,
+  getMemoryHistory,
+  getVersion,
+} from "./versioning";
+export type { MemoryVersion } from "./versioning";
+
+// ── Content Sanitization ────────────────────────────────────────
+export {
+  sanitizeContent,
+  sanitizeMemories,
+  shannonEntropy,
+  detectBase64Injection,
+  stripZeroWidthChars,
+  normalizeHomoglyphs,
+} from "./sanitize";
+
+// ── Mem0 Smart Consolidation Pipeline ───────────────────────────
+export {
+  smartConsolidate,
+  smartConsolidateHeuristic,
+  smartConsolidateLLM,
+} from "./mem0-pipeline";
+export type {
+  Mem0Action,
+  Mem0Decision,
+  Mem0PipelineResult,
+} from "./mem0-pipeline";
+
+// ── Session Observability ───────────────────────────────────────
+export {
+  startTrace,
+  getActiveTrace,
+  startSpan,
+  endSpan,
+  withSpan,
+  flushTrace,
+  loadTrace,
+  listTraces,
+} from "./observability";
+export type { Span, SpanKind, SessionTrace } from "./observability";
+
+// ── Vector Store Adapter ───────────────────────────────────────
+export { createVectorStore } from "./vector-store";
+export type { VectorStore, VectorSearchResult } from "./vector-store";
+
+// ── Structured Event Log ───────────────────────────────────────
+export {
+  logEvent,
+  readLog,
+  listLogDates,
+  queryEvents,
+  pruneOldLogs,
+} from "./event-log";
+export type { EventType, LogEvent } from "./event-log";
+
+// ── Checkpointed Execution ─────────────────────────────────────
+export {
+  createWorkflow,
+  loadWorkflow,
+  saveCheckpoint,
+  executeStep,
+  findResumePoint,
+  listWorkflows,
+} from "./checkpoint";
+export type {
+  Checkpoint,
+  CheckpointStatus,
+  WorkflowState,
+} from "./checkpoint";
+
+// ── Bidirectional Relay Sync ──────────────────────────────────
+export {
+  detectConflicts,
+  resolveConflict,
+  pullRemoteMemories,
+  pushLocalMemories,
+  syncBidirectional,
+  loadRelayManifest,
+  saveRelayManifest,
+} from "./relay-sync";
+export type {
+  RelayConflict,
+  RelaySyncResult,
+  RelayManifest,
+} from "./relay-sync";
+
+// ── Access Control ────────────────────────────────────────────
+export {
+  loadPolicy,
+  savePolicy,
+  defaultPolicy,
+  checkAccess,
+  filterAccessible,
+  resolvePrincipal,
+} from "./access-control";
+export type {
+  AccessLevel,
+  AccessRule,
+  AccessPolicy,
+} from "./access-control";
+
+// ── Feedback Loop ─────────────────────────────────────────────
+export {
+  recordFeedback,
+  loadFeedbackSignals,
+  computeScores,
+  getMemoryScore,
+  applyFeedbackToRelevance,
+  getFeedbackSummary,
+  detectImplicitFeedback,
+} from "./feedback-loop";
+export type {
+  FeedbackSignal,
+  FeedbackScore,
+  FeedbackSummary,
+} from "./feedback-loop";
+
+// ── Metrics Aggregation ───────────────────────────────────────
+export {
+  collectMemoryMetrics,
+  collectSessionMetrics,
+  collectEventMetrics,
+  aggregate,
+  buildTimeSeries,
+  getDashboardMetrics,
+  captureSnapshot,
+  loadSnapshot,
+  listSnapshots,
+} from "./metrics";
+export type {
+  MetricPoint,
+  MetricSeries,
+  MetricsSnapshot,
+  DashboardMetrics,
+} from "./metrics";
+
+// ── Cross-Repo Discovery ──────────────────────────────────────
+export {
+  loadManifest,
+  saveManifest,
+  initManifest,
+  scanSiblingRepos,
+  discoverAndRegister,
+  isPeerActive,
+  filterActivePeers,
+} from "./discovery";
+export type {
+  DiscoveryManifest,
+  DiscoveryCapability,
+  DiscoveryScanResult,
+} from "./discovery";
+
+// ── Verification Sweep ────────────────────────────────────────
+export {
+  runVerificationSweep,
+  formatSweepResults,
+  inferVerifyCheck,
+} from "./verification";
+export type { VerifyResult, SweepResult } from "./verification";
+
+// ── JSON Extraction ───────────────────────────────────────────
+export { extractBalancedJson } from "./json-extract";
 
 // ── Hooks ────────────────────────────────────────────────────────
 export { onSessionStart } from "./hooks/session-start";
