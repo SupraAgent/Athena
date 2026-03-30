@@ -3,10 +3,70 @@
 import * as React from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
+import {
+  HealthHero,
+  MemoryOverview,
+  SessionHistory,
+  VerificationStatus,
+  GraduationPipeline,
+} from "./hermes";
 
 type PersonaRow = {
   id: string;
   name: string;
+};
+
+type HermesData = {
+  metrics: {
+    activeMemories: number;
+    memoriesByType: Record<string, number>;
+    memoriesByScope: Record<string, number>;
+    avgRelevance: number;
+    sessionsLast7Days: number;
+    avgSessionDurationMs: number;
+    topTags: { tag: string; count: number }[];
+    healthScore: number;
+  };
+  trend: {
+    sessionCount: number;
+    avgCorrections: number;
+    recentCorrections: number;
+    direction: "improving" | "stable" | "degrading";
+    recurringViolations: string[];
+    summary: string;
+  } | null;
+  scorecards: Array<{
+    date: string;
+    correctionsReceived: number;
+    rulesChecked: number;
+    rulesPassed: number;
+    rulesFailed: number;
+    memoriesCreated: number;
+  }>;
+  graduation: {
+    candidates: Array<{
+      memoryId: string;
+      content: string;
+      confidence: string;
+      relevance: number;
+      correctionCount: number;
+      hasVerify: boolean;
+      reason: string;
+    }>;
+    alreadyGraduated: number;
+  };
+  confidenceCounts: Record<string, number>;
+  verification: {
+    checked: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    violations: { memoryContent: string; detail: string }[];
+  };
+  feedback: {
+    totalSignals: number;
+    averageScore: number;
+  };
 };
 
 const WIZARD_LINKS = [
@@ -53,6 +113,7 @@ const DOC_TYPES = [
 export function DashboardPage() {
   const { user } = useAuth();
   const [personaCount, setPersonaCount] = React.useState<number | null>(null);
+  const [hermes, setHermes] = React.useState<HermesData | null>(null);
 
   React.useEffect(() => {
     if (!user) return;
@@ -60,6 +121,10 @@ export function DashboardPage() {
       .then((r) => r.json())
       .then((data) => setPersonaCount(data.personas?.length ?? 0))
       .catch(() => setPersonaCount(0));
+    fetch("/api/hermes/dashboard")
+      .then((r) => r.json())
+      .then((data) => setHermes(data))
+      .catch(() => {});
   }, [user]);
 
   return (
@@ -134,6 +199,66 @@ export function DashboardPage() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Hermes Self-Evolution */}
+      <div className="mt-8">
+        <h2 className="mb-4 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          Hermes — Self-Evolution
+        </h2>
+
+        {!hermes && (
+          <div className="grid grid-cols-2 gap-4">
+            {[1, 2, 3, 4].map((i) => (
+              <div
+                key={i}
+                className={`rounded-xl border border-white/10 bg-white/[0.02] p-5 animate-pulse ${i === 1 ? "col-span-2" : ""}`}
+              >
+                <div className="h-4 w-32 rounded bg-white/5 mb-4" />
+                <div className="h-8 w-20 rounded bg-white/5" />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {hermes && (
+          <div className="space-y-4">
+            {/* Hero — full width */}
+            <HealthHero
+              healthScore={hermes.metrics.healthScore}
+              trend={hermes.trend}
+              activeMemories={hermes.metrics.activeMemories}
+            />
+
+            {/* Row 2 — Memory Overview + Session History */}
+            <div className="grid grid-cols-2 gap-4">
+              <MemoryOverview
+                memoriesByType={hermes.metrics.memoriesByType}
+                avgRelevance={hermes.metrics.avgRelevance}
+                activeMemories={hermes.metrics.activeMemories}
+                confidenceCounts={hermes.confidenceCounts}
+                topTags={hermes.metrics.topTags}
+              />
+              <SessionHistory scorecards={hermes.scorecards} />
+            </div>
+
+            {/* Row 3 — Verification + Graduation */}
+            <div className="grid grid-cols-2 gap-4">
+              <VerificationStatus
+                checked={hermes.verification.checked}
+                passed={hermes.verification.passed}
+                failed={hermes.verification.failed}
+                skipped={hermes.verification.skipped}
+                violations={hermes.verification.violations}
+              />
+              <GraduationPipeline
+                candidates={hermes.graduation.candidates}
+                alreadyGraduated={hermes.graduation.alreadyGraduated}
+                confidenceCounts={hermes.confidenceCounts}
+              />
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
