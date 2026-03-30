@@ -9,7 +9,7 @@ export default defineConfig([
     clean: true,
   },
   {
-    entry: ["src/cli.ts"],
+    entry: ["src/cli.ts", "src/stop-worker.ts", "src/remote-worker.ts"],
     format: ["cjs"],
     sourcemap: true,
     banner: { js: "#!/usr/bin/env node" },

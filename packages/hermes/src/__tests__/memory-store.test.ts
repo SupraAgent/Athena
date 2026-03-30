@@ -4,7 +4,9 @@ import * as path from "path";
 import * as os from "os";
 import {
   loadMemories,
+  loadMemoriesByScope,
   saveMemory,
+  updateMemory,
   deleteMemory,
   createMemory,
   searchMemories,
@@ -97,6 +99,7 @@ describe("searchMemories", () => {
       updatedAt: new Date().toISOString(),
       source: "test",
       relevance,
+      scope: "user",
     };
   }
 
@@ -131,11 +134,11 @@ describe("deduplicateMemories", () => {
   it("detects exact content duplicates", () => {
     const existing: Memory[] = [{
       id: "mem_1", type: "fact", content: "Uses TypeScript",
-      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5,
+      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5, scope: "user",
     }];
     const newMem: Memory = {
       id: "mem_2", type: "fact", content: "Uses TypeScript",
-      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5,
+      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5, scope: "user",
     };
     expect(deduplicateMemories(existing, newMem)).toBe(true);
   });
@@ -143,11 +146,11 @@ describe("deduplicateMemories", () => {
   it("is case-insensitive", () => {
     const existing: Memory[] = [{
       id: "mem_1", type: "fact", content: "uses typescript",
-      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5,
+      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5, scope: "user",
     }];
     const newMem: Memory = {
       id: "mem_2", type: "fact", content: "Uses TypeScript",
-      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5,
+      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5, scope: "user",
     };
     expect(deduplicateMemories(existing, newMem)).toBe(true);
   });
@@ -155,11 +158,11 @@ describe("deduplicateMemories", () => {
   it("allows different content", () => {
     const existing: Memory[] = [{
       id: "mem_1", type: "fact", content: "Uses TypeScript",
-      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5,
+      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5, scope: "user",
     }];
     const newMem: Memory = {
       id: "mem_2", type: "fact", content: "Uses JavaScript",
-      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5,
+      tags: [], createdAt: "", updatedAt: "", source: "", relevance: 0.5, scope: "user",
     };
     expect(deduplicateMemories(existing, newMem)).toBe(false);
   });
@@ -203,5 +206,46 @@ describe("saveSessionSummary", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).toContain("ses_test");
     expect(files[0]).toContain("2026-03-28");
+  });
+});
+
+describe("updateMemory", () => {
+  it("updates content and relevance of an existing memory", async () => {
+    const mem = await createMemory(tmpDir, "fact", "Original content", [], "ses_1", 0.5);
+    const updated = await updateMemory(tmpDir, mem.id, {
+      content: "Updated content",
+      relevance: 0.9,
+    });
+
+    expect(updated).not.toBeNull();
+    expect(updated!.content).toBe("Updated content");
+    expect(updated!.relevance).toBe(0.9);
+    expect(updated!.id).toBe(mem.id);
+
+    // Verify persisted
+    const loaded = await loadMemories(tmpDir);
+    const found = loaded.find((m) => m.id === mem.id);
+    expect(found!.content).toBe("Updated content");
+  });
+
+  it("returns null for nonexistent ID", async () => {
+    const result = await updateMemory(tmpDir, "nonexistent_id", { content: "new" });
+    expect(result).toBeNull();
+  });
+});
+
+describe("loadMemoriesByScope", () => {
+  it("filters memories by scope", async () => {
+    await createMemory(tmpDir, "fact", "User memory", [], "ses_1", 0.7, "user");
+    await createMemory(tmpDir, "fact", "Session memory", [], "ses_1", 0.5, "session");
+    await createMemory(tmpDir, "fact", "Agent memory", [], "agent_1", 0.6, "agent");
+
+    const userMems = await loadMemoriesByScope(tmpDir, "user");
+    expect(userMems).toHaveLength(1);
+    expect(userMems[0].content).toBe("User memory");
+
+    const sessionMems = await loadMemoriesByScope(tmpDir, "session");
+    expect(sessionMems).toHaveLength(1);
+    expect(sessionMems[0].content).toBe("Session memory");
   });
 });

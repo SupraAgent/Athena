@@ -1,35 +1,11 @@
 import type { Memory, HermesConfig, HookOutput } from "../types";
-import { loadMemories, searchMemories } from "../memory-store";
-import { loadConfig, getHermesDir, findRepoRoot } from "../config";
+import { loadMemories, loadAllRemoteMemories } from "../memory-store";
+import { loadConfig, getHermesDir, findRepoRoot, resolveMode, getOrCreateThread } from "../config";
+import { hashMemories, formatFullBlocks } from "../diff";
+import { loadCachedRemoteMemories, isCacheStale, triggerBackgroundRefresh } from "../remote-cache";
+import { sanitizeMemories } from "../sanitize";
 
-/** Format memories into a markdown context block for Claude Code. */
-function formatContextBlock(memories: Memory[]): string {
-  if (memories.length === 0) return "";
-
-  const lines = [
-    "# Hermes — Persistent Memory",
-    `_${memories.length} relevant memories loaded._`,
-    "",
-  ];
-
-  const grouped: Record<string, Memory[]> = {};
-  for (const m of memories) {
-    (grouped[m.type] ??= []).push(m);
-  }
-
-  for (const [type, mems] of Object.entries(grouped)) {
-    lines.push(`## ${type.charAt(0).toUpperCase() + type.slice(1)}s`);
-    for (const m of mems) {
-      const tags = m.tags.length > 0 ? ` [${m.tags.join(", ")}]` : "";
-      lines.push(`- ${m.content}${tags}`);
-    }
-    lines.push("");
-  }
-
-  return lines.join("\n");
-}
-
-/** SessionStart hook: load and rank memories, return context for injection. */
+/** SessionStart hook: load and rank memories, initialize thread, return context. */
 export async function onSessionStart(
   sessionId: string,
   repoRoot?: string
@@ -37,15 +13,63 @@ export async function onSessionStart(
   const root = repoRoot ?? findRepoRoot();
   const hermesDir = getHermesDir(root);
   const config = await loadConfig(hermesDir);
+  const mode = resolveMode(config);
 
-  const allMemories = await loadMemories(hermesDir);
+  // Off mode — do nothing
+  if (mode === "off") {
+    return { context: "" };
+  }
+
+  // Initialize or resume conversation thread
+  await getOrCreateThread(hermesDir, sessionId);
+
+  // Load all memories and filter out session-scoped memories from other sessions
+  const localMemories = (await loadMemories(hermesDir)).filter(
+    (m) => m.scope !== "session" || m.source === sessionId
+  );
+
+  // Load remote memories from cache (never blocks on network)
+  let remoteMemories: Memory[] = [];
+  if (config.sources.length > 0) {
+    remoteMemories = await loadCachedRemoteMemories(hermesDir, config.sources);
+    // Trigger background refresh if cache is stale
+    if (await isCacheStale(hermesDir, config.sources)) {
+      triggerBackgroundRefresh(hermesDir, config.sources);
+    }
+  }
+
+  // Sanitize all memories before injection
+  const allMemories = sanitizeMemories([...localMemories, ...remoteMemories]);
   if (allMemories.length === 0) {
     return { context: "" };
   }
 
   // Rank by relevance and recency, take top N
   const ranked = rankMemories(allMemories, config.contextLimit);
-  const context = formatContextBlock(ranked);
+
+  // Store the hash for future diffing
+  const hash = hashMemories(ranked);
+
+  // In whisper mode, only inject decisions and guidance (lightweight)
+  if (mode === "whisper") {
+    const whisperTypes = new Set(["decision", "guidance", "pending"]);
+    const whisperMemories = ranked.filter((m) => whisperTypes.has(m.type));
+    if (whisperMemories.length === 0) return { context: "" };
+
+    const lines = [
+      "# Hermes",
+      `_${whisperMemories.length} active items._`,
+      "",
+      ...whisperMemories.map((m) => {
+        const label = m.type.charAt(0).toUpperCase() + m.type.slice(1);
+        return `- **[${label}]** ${m.content}`;
+      }),
+    ];
+    return { context: lines.join("\n") };
+  }
+
+  // Full mode — inject all memory blocks
+  const context = formatFullBlocks(ranked);
   return { context };
 }
 

@@ -1,8 +1,10 @@
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as YAML from "yaml";
-import type { HermesConfig } from "./types";
+import type { HermesConfig, HermesMode, ConversationMap, ConversationThread, SyncState } from "./types";
 import { DEFAULT_CONFIG } from "./types";
+
+// ── Paths ───────────────────────────────────────────────────────
 
 /** Resolve the .athena/hermes/ directory from a repo root. */
 export function getHermesDir(repoRoot: string): string {
@@ -23,6 +25,24 @@ export function findRepoRoot(): string {
   }
 }
 
+// ── Mode Resolution ─────────────────────────────────────────────
+
+const VALID_MODES = new Set<string>(["whisper", "full", "off"]);
+
+/** Resolve operational mode: env var > config file > default. */
+export function resolveMode(config: HermesConfig): HermesMode {
+  const envMode = process.env.HERMES_MODE?.toLowerCase();
+  if (envMode && VALID_MODES.has(envMode)) return envMode as HermesMode;
+  return config.mode ?? "whisper";
+}
+
+/** Resolve Anthropic API key: env var > config file. */
+export function resolveAnthropicKey(config: HermesConfig): string | undefined {
+  return process.env.ANTHROPIC_API_KEY ?? config.anthropicApiKey;
+}
+
+// ── Config CRUD ─────────────────────────────────────────────────
+
 /** Load hermes.yaml config, returning defaults if not found. */
 export async function loadConfig(hermesDir: string): Promise<HermesConfig> {
   const configPath = path.join(hermesDir, "hermes.yaml");
@@ -33,10 +53,21 @@ export async function loadConfig(hermesDir: string): Promise<HermesConfig> {
       maxMemories: parsed?.max_memories ?? DEFAULT_CONFIG.maxMemories,
       autoExtract: parsed?.auto_extract ?? DEFAULT_CONFIG.autoExtract,
       contextLimit: parsed?.context_limit ?? DEFAULT_CONFIG.contextLimit,
+      mode: (VALID_MODES.has(parsed?.mode) ? parsed.mode : DEFAULT_CONFIG.mode) as HermesMode,
+      anthropicApiKey: parsed?.anthropic_api_key,
       sources: (parsed?.sources ?? []).map((s: Record<string, string>) => ({
         repo: s.repo ?? "",
         branch: s.branch ?? "main",
         path: s.path ?? ".athena/hermes/",
+      })),
+      agents: (parsed?.agents ?? []).map((a: Record<string, unknown>) => ({
+        id: String(a.id ?? ""),
+        name: String(a.name ?? ""),
+        role: String(a.role ?? ""),
+        heartbeatMinutes: Number(a.heartbeat_minutes) || 60,
+        monthlyBudgetUsd: Number(a.monthly_budget_usd) || 50,
+        reportsTo: a.reports_to ? String(a.reports_to) : null,
+        triggers: Array.isArray(a.triggers) ? a.triggers.map(String) : [],
       })),
     };
   } catch {
@@ -47,16 +78,119 @@ export async function loadConfig(hermesDir: string): Promise<HermesConfig> {
 /** Save hermes.yaml config. Creates directory if needed. */
 export async function saveConfig(hermesDir: string, config: HermesConfig): Promise<void> {
   await fs.mkdir(hermesDir, { recursive: true });
-  const doc = {
+  const doc: Record<string, unknown> = {
     max_memories: config.maxMemories,
     auto_extract: config.autoExtract,
     context_limit: config.contextLimit,
+    mode: config.mode,
     sources: config.sources.map((s) => ({
       repo: s.repo,
       branch: s.branch,
       path: s.path,
     })),
+    agents: config.agents.map((a) => ({
+      id: a.id,
+      name: a.name,
+      role: a.role,
+      heartbeat_minutes: a.heartbeatMinutes,
+      monthly_budget_usd: a.monthlyBudgetUsd,
+      reports_to: a.reportsTo,
+      triggers: a.triggers,
+    })),
   };
+  // SECURITY: Never write API keys to config files (could be committed to git).
+  // API keys should be set via ANTHROPIC_API_KEY environment variable only.
   const content = `# Hermes Configuration\n${YAML.stringify(doc)}`;
   await fs.writeFile(path.join(hermesDir, "hermes.yaml"), content, "utf-8");
+}
+
+// ── Conversation Threading ──────────────────────────────────────
+
+function conversationsPath(hermesDir: string): string {
+  return path.join(hermesDir, "conversations.json");
+}
+
+/** Load conversation map from disk. */
+export async function loadConversations(hermesDir: string): Promise<ConversationMap> {
+  try {
+    const raw = await fs.readFile(conversationsPath(hermesDir), "utf-8");
+    return JSON.parse(raw) as ConversationMap;
+  } catch {
+    return {};
+  }
+}
+
+/** Save conversation map to disk. */
+export async function saveConversations(hermesDir: string, map: ConversationMap): Promise<void> {
+  await fs.mkdir(hermesDir, { recursive: true });
+  await fs.writeFile(conversationsPath(hermesDir), JSON.stringify(map, null, 2), "utf-8");
+}
+
+/** Get or create a conversation thread for a session. */
+export async function getOrCreateThread(
+  hermesDir: string,
+  sessionId: string
+): Promise<ConversationThread> {
+  const map = await loadConversations(hermesDir);
+
+  // Check if this session already has a thread
+  if (map[sessionId]) {
+    map[sessionId].lastActiveAt = new Date().toISOString();
+    await saveConversations(hermesDir, map);
+    return map[sessionId];
+  }
+
+  // Create a new thread
+  const now = new Date().toISOString();
+  const thread: ConversationThread = {
+    threadId: `thread_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    sessionIds: [sessionId],
+    createdAt: now,
+    lastActiveAt: now,
+    lastInjectedMemoryIds: [],
+    lastInjectedHash: "",
+  };
+
+  map[sessionId] = thread;
+  await saveConversations(hermesDir, map);
+  return thread;
+}
+
+/** Update the injection state for a thread (for memory diffing). */
+export async function updateThreadInjection(
+  hermesDir: string,
+  sessionId: string,
+  memoryIds: string[],
+  contentHash: string
+): Promise<void> {
+  const map = await loadConversations(hermesDir);
+  if (map[sessionId]) {
+    map[sessionId].lastInjectedMemoryIds = memoryIds;
+    map[sessionId].lastInjectedHash = contentHash;
+    map[sessionId].lastActiveAt = new Date().toISOString();
+    await saveConversations(hermesDir, map);
+  }
+}
+
+// ── Sync State ──────────────────────────────────────────────────
+
+function syncStatePath(hermesDir: string, sessionId: string): string {
+  return path.join(hermesDir, "sync", `${sessionId}.json`);
+}
+
+/** Load sync state for a session. */
+export async function loadSyncState(hermesDir: string, sessionId: string): Promise<SyncState | null> {
+  try {
+    const raw = await fs.readFile(syncStatePath(hermesDir, sessionId), "utf-8");
+    return JSON.parse(raw) as SyncState;
+  } catch {
+    return null;
+  }
+}
+
+/** Save sync state for a session. */
+export async function saveSyncState(hermesDir: string, state: SyncState): Promise<void> {
+  const dir = path.join(hermesDir, "sync");
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(syncStatePath(hermesDir, state.sessionId), JSON.stringify(state, null, 2), "utf-8");
 }
