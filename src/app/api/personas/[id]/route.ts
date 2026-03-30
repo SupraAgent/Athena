@@ -79,6 +79,10 @@ export async function PUT(
         review_focus: body.review_focus,
         scoring_weights: body.scoring_weights,
         icon: body.icon,
+        heartbeat_minutes: body.heartbeat_minutes ?? 60,
+        monthly_budget_usd: body.monthly_budget_usd ?? 50,
+        reports_to: body.reports_to || null,
+        triggers: body.triggers || [],
       })
       .eq("id", id)
       .eq("created_by", user.id)

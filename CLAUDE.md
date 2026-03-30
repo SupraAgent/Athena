@@ -50,6 +50,38 @@ Anthropic API (user's key)
 GitHub API / Octokit (repo integration)
 ```
 
+## Workflow Rules
+
+### Before Starting Work
+- **Plan first.** For any task touching 3+ files, use `/project:plan` or enter plan mode before writing code.
+- **Read before editing.** Never modify a file you haven't read in this session.
+
+### Before Committing
+- Run `npx tsc --noEmit` — no type errors allowed.
+- Run `npm run lint` — no lint warnings in changed files.
+- Run `npm run build` — all packages must build cleanly.
+- Run tests in changed packages: `npm run -w @supra/hermes test` and/or `npm run -w @supra/builder test`.
+- Or just run `/project:check` which does all of the above.
+
+### Cross-Package Rules
+- After changing `packages/builder/` types or exports, verify the main app still imports correctly.
+- After changing `packages/hermes/`, rebuild (`npm run -w @supra/hermes build`) before testing hooks.
+- Never modify `packages/builder/` public API without updating `packages/builder/INTEGRATION.md`.
+
+### Commit Style
+- One logical change per commit. Don't bundle unrelated fixes.
+- Use conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
+- Audit fixes should be done in a single pass, not iterated across multiple commits.
+
+## Custom Commands
+
+| Command | Purpose |
+|---------|---------|
+| `/project:check` | Full quality gate — types, lint, build, tests |
+| `/project:audit` | P0-P3 prioritized codebase audit |
+| `/project:plan` | Structured implementation planning |
+| `/project:improve-round` | Run one SupraLoop improvement cycle |
+
 ## Legacy
 - Old automation-builder code is preserved on the `legacy/automation-builder` branch
 - See `FORK_ME.md` for the complete fork checklist (based on lessons from SupraLoop → Athena)
