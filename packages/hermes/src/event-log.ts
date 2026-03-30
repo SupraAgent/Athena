@@ -26,6 +26,11 @@ export type EventType =
   | "extraction.completed"
   | "consolidation.completed"
   | "correction.detected"
+  | "correction.promoted"
+  | "verification.sweep"
+  | "verification.failed"
+  | "session.scored"
+  | "graduation.candidate"
   | "search.executed"
   | "error";
 

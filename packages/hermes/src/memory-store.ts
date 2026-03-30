@@ -1,7 +1,18 @@
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as crypto from "crypto";
 import * as YAML from "yaml";
-import type { Memory, MemoryType, SessionSummary, ExternalSource } from "./types";
+import type { Memory, MemoryType, MemoryConfidence, VerifyCheck, SessionSummary, ExternalSource } from "./types";
+import { resolveEncryptionKey, encryptContent, decryptContent, isEncrypted } from "./encryption";
+
+// ── Atomic write helper ────────────────────────────────────────
+
+/** Write file atomically: write to temp, then rename. Prevents corruption from concurrent writes. */
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
 
 // ── ID generation ───────────────────────────────────────────────
 
@@ -47,7 +58,7 @@ function memoryFilePath(hermesDir: string, id: string): string {
 // ── Serialization ───────────��───────────────────────────────────
 
 function memoryToYaml(m: Memory): string {
-  const doc = {
+  const doc: Record<string, unknown> = {
     id: m.id,
     type: m.type,
     content: m.content,
@@ -58,6 +69,9 @@ function memoryToYaml(m: Memory): string {
     relevance: m.relevance,
     scope: m.scope ?? "user",
   };
+  if (m.verify) doc.verify = m.verify;
+  if (m.confidence) doc.confidence = m.confidence;
+  if (m.correctionCount && m.correctionCount > 0) doc.correction_count = m.correctionCount;
   return `# Hermes Memory — ${m.type}\n${YAML.stringify(doc)}`;
 }
 
@@ -73,7 +87,7 @@ function yamlToMemory(raw: string): Memory | null {
     if (!parsed?.id || !parsed?.type || !parsed?.content) return null;
     if (!SAFE_ID_PATTERN.test(parsed.id)) return null;
     if (!VALID_MEMORY_TYPES.has(parsed.type)) return null;
-    return {
+    const mem: Memory = {
       id: parsed.id,
       type: parsed.type as MemoryType,
       content: parsed.content,
@@ -84,6 +98,10 @@ function yamlToMemory(raw: string): Memory | null {
       relevance: parsed.relevance ?? 0.5,
       scope: parsed.scope ?? "user",
     };
+    if (parsed.verify) mem.verify = parsed.verify as VerifyCheck;
+    if (parsed.confidence) mem.confidence = parsed.confidence as MemoryConfidence;
+    if (parsed.correction_count) mem.correctionCount = Number(parsed.correction_count);
+    return mem;
   } catch {
     return null;
   }
@@ -104,18 +122,25 @@ function sessionToYaml(s: SessionSummary): string {
 
 // ── CRUD ────────────────────────────────────────────────────────
 
-/** Load all memories from .athena/hermes/memories/. Reads sequentially to avoid EMFILE. */
+/** Load all memories from .athena/hermes/memories/. Reads sequentially to avoid EMFILE. Decrypts if key is set. */
 export async function loadMemories(hermesDir: string): Promise<Memory[]> {
   const dir = memoriesDir(hermesDir);
   try {
     const files = await fs.readdir(dir);
     const yamlFiles = files.filter((f) => f.endsWith(".yaml"));
+    const key = await resolveEncryptionKey(hermesDir);
     const memories: Memory[] = [];
     for (const f of yamlFiles) {
       try {
         const raw = await fs.readFile(path.join(dir, f), "utf-8");
         const mem = yamlToMemory(raw);
-        if (mem) memories.push(mem);
+        if (mem) {
+          // Decrypt content if it was encrypted
+          if (key && isEncrypted(mem.content)) {
+            mem.content = decryptContent(mem.content, key);
+          }
+          memories.push(mem);
+        }
       } catch {
         // Skip unreadable files, continue loading others
       }
@@ -126,18 +151,26 @@ export async function loadMemories(hermesDir: string): Promise<Memory[]> {
   }
 }
 
-/** Save a single memory. Creates directories if needed. */
+/** Save a single memory. Creates directories if needed. Encrypts content if key is configured. */
 export async function saveMemory(hermesDir: string, memory: Memory): Promise<void> {
   const dir = memoriesDir(hermesDir);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(memoryFilePath(hermesDir, memory.id), memoryToYaml(memory), "utf-8");
+
+  // Optionally encrypt content before writing
+  const key = await resolveEncryptionKey(hermesDir);
+  if (key) {
+    const encrypted = { ...memory, content: encryptContent(memory.content, key) };
+    await atomicWriteFile(memoryFilePath(hermesDir, encrypted.id), memoryToYaml(encrypted));
+  } else {
+    await atomicWriteFile(memoryFilePath(hermesDir, memory.id), memoryToYaml(memory));
+  }
 }
 
 /** Update an existing memory's content and metadata. Reads single file, not all memories. */
 export async function updateMemory(
   hermesDir: string,
   id: string,
-  updates: Partial<Pick<Memory, "content" | "relevance" | "tags" | "scope">>
+  updates: Partial<Pick<Memory, "content" | "relevance" | "tags" | "scope" | "verify" | "confidence" | "correctionCount">>
 ): Promise<Memory | null> {
   try {
     const filePath = memoryFilePath(hermesDir, id);
@@ -215,7 +248,7 @@ export async function saveSessionSummary(
     ? summary.endedAt.slice(0, 10)
     : new Date().toISOString().slice(0, 10);
   const filename = `${dateStr}-${summary.sessionId}.yaml`;
-  await fs.writeFile(path.join(dir, filename), sessionToYaml(summary), "utf-8");
+  await atomicWriteFile(path.join(dir, filename), sessionToYaml(summary));
 }
 
 // ── Search ──────────────────────────────────────────────────────

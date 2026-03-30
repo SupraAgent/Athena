@@ -1,5 +1,5 @@
 import type { HookOutput, Memory } from "../types";
-import { loadMemories, searchMemories, createMemory } from "../memory-store";
+import { loadMemories, searchMemories, createMemory, updateMemory } from "../memory-store";
 import {
   loadConfig, getHermesDir, findRepoRoot, resolveMode,
   loadSyncState, saveSyncState,
@@ -8,6 +8,8 @@ import { hashMemories, diffMemories, formatDiffBlock } from "../diff";
 import { loadCachedRemoteMemories } from "../remote-cache";
 import { semanticSearch } from "../semantic";
 import { sanitizeMemories, sanitizeContent } from "../sanitize";
+import { inferVerifyCheck } from "../verification";
+import { logEvent } from "../event-log";
 
 /** UserPromptSubmit hook: scan prompt for keywords, inject relevant memories or diffs. */
 export async function onUserPrompt(
@@ -136,6 +138,10 @@ const MIN_CORRECTION_LENGTH = 20;
  * become guidance for future sessions.
  *
  * Uses strict detection: a correction keyword + a reference to Claude's behavior.
+ *
+ * Auto-promotion: if the same correction pattern appears a second time,
+ * the existing memory gets boosted to relevance 1.0, tagged as "verified-rule",
+ * and a verify check is auto-generated if possible.
  */
 async function detectAndSaveCorrection(
   prompt: string,
@@ -157,17 +163,66 @@ async function detectAndSaveCorrection(
 
     // Use provided memories or load once
     const existing = existingMemories ?? await loadMemories(hermesDir);
-    const isDuplicate = existing.some(
+
+    // Check for existing correction on the same topic
+    const similar = existing.find(
       (m) => m.type === "guidance" &&
         m.tags.includes("correction") &&
         m.content.toLowerCase().includes(correction.toLowerCase().slice(0, 30))
     );
-    if (isDuplicate) return;
 
-    await createMemory(
+    if (similar) {
+      // Repeat correction — auto-promote to verified rule
+      const count = (similar.correctionCount ?? 1) + 1;
+      const updates: Partial<Memory> = {
+        relevance: 1.0,
+        correctionCount: count,
+        confidence: "confirmed",
+      };
+
+      // Add verified-rule tag if not already present
+      if (!similar.tags.includes("verified-rule")) {
+        updates.tags = [...similar.tags, "verified-rule"];
+      }
+
+      // Auto-generate verify check if none exists
+      if (!similar.verify) {
+        const check = inferVerifyCheck(similar.content);
+        if (check) updates.verify = check;
+      }
+
+      await updateMemory(hermesDir, similar.id, updates);
+
+      await logEvent(hermesDir, "correction.promoted", sessionId, {
+        memoryId: similar.id,
+        correctionCount: count,
+        content: similar.content.slice(0, 100),
+      });
+      return;
+    }
+
+    // First-time correction — create new guidance memory
+    const verifyCheck = inferVerifyCheck(correction);
+    const newMemory = await createMemory(
       hermesDir, "guidance", correction,
       ["self-improvement", "correction"], sessionId, 0.65
     );
+
+    // Attach verify check and initial confidence if we could infer one
+    if (newMemory && (verifyCheck || true)) {
+      const updates: Partial<Memory> = {
+        correctionCount: 1,
+        confidence: "observed" as const,
+      };
+      if (verifyCheck) updates.verify = verifyCheck;
+      await updateMemory(hermesDir, newMemory.id, updates);
+    }
+
+    await logEvent(hermesDir, "correction.detected", sessionId, {
+      correction: correction.slice(0, 100),
+      hasVerify: !!verifyCheck,
+    });
+
     return; // Only save one correction per prompt
   }
 }

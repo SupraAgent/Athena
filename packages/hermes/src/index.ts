@@ -3,6 +3,8 @@ export type {
   Memory,
   MemoryType,
   MemoryScope,
+  MemoryConfidence,
+  VerifyCheck,
   SessionSummary,
   HermesConfig,
   HermesMode,
@@ -75,8 +77,12 @@ export {
   buildIndex,
   semanticSearch,
   findSimilar,
+  bm25Score,
 } from "./semantic";
 export type { SemanticIndex } from "./semantic";
+
+// ── Query Expansion (Synonyms) ──────────────────────────────────
+export { expandQuery } from "./synonyms";
 
 // ── Memory Consolidation ────────────────────────────────────────
 export {
@@ -95,11 +101,36 @@ export {
 } from "./remote-cache";
 
 // ── Git-Aware Aging ─────────────────────────────────────────────
-export { ageMemories } from "./git-aging";
+export { ageMemories, getCurrentBranch, getBranchFiles, branchBoost } from "./git-aging";
 export type { AgingResult } from "./git-aging";
 
+// ── Encryption at Rest ─────────────────────────────────────────
+export {
+  deriveKey,
+  encryptContent,
+  decryptContent,
+  isEncrypted,
+  getOrCreateSalt,
+  resolveEncryptionKey,
+} from "./encryption";
+
+// ── Memory Version History ─────────────────────────────────────
+export {
+  versionMemory,
+  getMemoryHistory,
+  getVersion,
+} from "./versioning";
+export type { MemoryVersion } from "./versioning";
+
 // ── Content Sanitization ────────────────────────────────────────
-export { sanitizeContent, sanitizeMemories } from "./sanitize";
+export {
+  sanitizeContent,
+  sanitizeMemories,
+  shannonEntropy,
+  detectBase64Injection,
+  stripZeroWidthChars,
+  normalizeHomoglyphs,
+} from "./sanitize";
 
 // ── Mem0 Smart Consolidation Pipeline ───────────────────────────
 export {
@@ -154,6 +185,99 @@ export type {
   CheckpointStatus,
   WorkflowState,
 } from "./checkpoint";
+
+// ── Bidirectional Relay Sync ──────────────────────────────────
+export {
+  detectConflicts,
+  resolveConflict,
+  pullRemoteMemories,
+  pushLocalMemories,
+  syncBidirectional,
+  loadRelayManifest,
+  saveRelayManifest,
+} from "./relay-sync";
+export type {
+  RelayConflict,
+  RelaySyncResult,
+  RelayManifest,
+} from "./relay-sync";
+
+// ── Access Control ────────────────────────────────────────────
+export {
+  loadPolicy,
+  savePolicy,
+  defaultPolicy,
+  checkAccess,
+  filterAccessible,
+  resolvePrincipal,
+} from "./access-control";
+export type {
+  AccessLevel,
+  AccessRule,
+  AccessPolicy,
+} from "./access-control";
+
+// ── Feedback Loop ─────────────────────────────────────────────
+export {
+  recordFeedback,
+  loadFeedbackSignals,
+  computeScores,
+  getMemoryScore,
+  applyFeedbackToRelevance,
+  getFeedbackSummary,
+  detectImplicitFeedback,
+} from "./feedback-loop";
+export type {
+  FeedbackSignal,
+  FeedbackScore,
+  FeedbackSummary,
+} from "./feedback-loop";
+
+// ── Metrics Aggregation ───────────────────────────────────────
+export {
+  collectMemoryMetrics,
+  collectSessionMetrics,
+  collectEventMetrics,
+  aggregate,
+  buildTimeSeries,
+  getDashboardMetrics,
+  captureSnapshot,
+  loadSnapshot,
+  listSnapshots,
+} from "./metrics";
+export type {
+  MetricPoint,
+  MetricSeries,
+  MetricsSnapshot,
+  DashboardMetrics,
+} from "./metrics";
+
+// ── Cross-Repo Discovery ──────────────────────────────────────
+export {
+  loadManifest,
+  saveManifest,
+  initManifest,
+  scanSiblingRepos,
+  discoverAndRegister,
+  isPeerActive,
+  filterActivePeers,
+} from "./discovery";
+export type {
+  DiscoveryManifest,
+  DiscoveryCapability,
+  DiscoveryScanResult,
+} from "./discovery";
+
+// ── Verification Sweep ────────────────────────────────────────
+export {
+  runVerificationSweep,
+  formatSweepResults,
+  inferVerifyCheck,
+} from "./verification";
+export type { VerifyResult, SweepResult } from "./verification";
+
+// ── JSON Extraction ───────────────────────────────────────────
+export { extractBalancedJson } from "./json-extract";
 
 // ── Hooks ────────────────────────────────────────────────────────
 export { onSessionStart } from "./hooks/session-start";

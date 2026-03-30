@@ -4,6 +4,8 @@ import { loadConfig, getHermesDir, findRepoRoot, resolveMode, getOrCreateThread 
 import { hashMemories, formatFullBlocks } from "../diff";
 import { loadCachedRemoteMemories, isCacheStale, triggerBackgroundRefresh } from "../remote-cache";
 import { sanitizeMemories } from "../sanitize";
+import { getBranchFiles, branchBoost } from "../git-aging";
+import { runVerificationSweep, formatSweepResults } from "../verification";
 
 /** SessionStart hook: load and rank memories, initialize thread, return context. */
 export async function onSessionStart(
@@ -44,8 +46,15 @@ export async function onSessionStart(
     return { context: "" };
   }
 
-  // Rank by relevance and recency, take top N
-  const ranked = rankMemories(allMemories, config.contextLimit);
+  // Run verification sweep on memories with verify checks
+  const sweepResult = await runVerificationSweep(allMemories, root, hermesDir, sessionId);
+  const violationBlock = formatSweepResults(sweepResult);
+
+  // Get branch context for relevance boosting
+  const branchFiles = getBranchFiles(root);
+
+  // Rank by relevance and recency, respecting token budget
+  const ranked = rankMemories(allMemories, config.contextLimit, config.tokenBudget, branchFiles);
 
   // Store the hash for future diffing
   const hash = hashMemories(ranked);
@@ -54,7 +63,9 @@ export async function onSessionStart(
   if (mode === "whisper") {
     const whisperTypes = new Set(["decision", "guidance", "pending"]);
     const whisperMemories = ranked.filter((m) => whisperTypes.has(m.type));
-    if (whisperMemories.length === 0) return { context: "" };
+    if (whisperMemories.length === 0) {
+      return { context: violationBlock };
+    }
 
     const lines = [
       "# Hermes",
@@ -65,27 +76,45 @@ export async function onSessionStart(
         return `- **[${label}]** ${m.content}`;
       }),
     ];
-    return { context: lines.join("\n") };
+    // Prepend violations if any
+    const memoryContext = lines.join("\n");
+    return { context: violationBlock ? violationBlock + "\n\n" + memoryContext : memoryContext };
   }
 
   // Full mode — inject all memory blocks
   const context = formatFullBlocks(ranked);
-  return { context };
+  return { context: violationBlock ? violationBlock + "\n\n" + context : context };
 }
 
-/** Rank memories by relevance * recency. */
-function rankMemories(memories: Memory[], limit: number): Memory[] {
+/** Estimate token count for a string (~3.5 chars per token). */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3.5);
+}
+
+/** Rank memories by relevance * recency * branch context, respecting token budget. */
+function rankMemories(memories: Memory[], limit: number, tokenBudget = 2000, branchFiles: string[] = []): Memory[] {
   const now = Date.now();
-  return [...memories]
+  const scored = [...memories]
     .map((m) => {
       const ageMs = now - new Date(m.updatedAt).getTime();
       const ageDays = ageMs / (1000 * 60 * 60 * 24);
-      // Decay: halve score every 30 days
       const recencyBoost = Math.pow(0.5, ageDays / 30);
-      const score = m.relevance * 0.7 + recencyBoost * 0.3;
+      const branchScore = branchBoost(m, branchFiles);
+      // Weights: 60% relevance, 25% recency, 15% branch context (branchScore is 0-0.2)
+      const score = m.relevance * 0.6 + recencyBoost * 0.25 + branchScore * 0.75;
       return { memory: m, score };
     })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map((s) => s.memory);
+    .sort((a, b) => b.score - a.score);
+
+  // Greedily select memories until token budget or count limit is exhausted
+  const selected: Memory[] = [];
+  let tokensUsed = 0;
+  for (const { memory } of scored) {
+    if (selected.length >= limit) break;
+    const tokens = estimateTokens(memory.content);
+    if (tokensUsed + tokens > tokenBudget && selected.length > 0) break;
+    selected.push(memory);
+    tokensUsed += tokens;
+  }
+  return selected;
 }

@@ -15,6 +15,19 @@ export type MemoryType =
 /** Memory scope — controls visibility and lifecycle. */
 export type MemoryScope = "user" | "agent" | "session";
 
+/** Confidence lifecycle for memory graduation. */
+export type MemoryConfidence = "observed" | "confirmed" | "graduated";
+
+/** Machine-checkable verification for a memory rule. */
+export type VerifyCheck = {
+  /** Type of check to perform. */
+  type: "grep" | "grep-zero" | "file-exists" | "file-missing";
+  /** Grep pattern or file glob. */
+  pattern: string;
+  /** Directory/file scope for grep checks. */
+  path?: string;
+};
+
 /** A single memory entry. */
 export type Memory = {
   id: string;
@@ -29,6 +42,12 @@ export type Memory = {
   relevance: number;
   /** Scope: user (persistent), agent (namespaced), session (auto-pruned). */
   scope: MemoryScope;
+  /** Machine-checkable verification rule. If present, swept at session start. */
+  verify?: VerifyCheck;
+  /** Confidence lifecycle: observed → confirmed → graduated. */
+  confidence?: MemoryConfidence;
+  /** Number of times this memory has been reinforced by corrections. */
+  correctionCount?: number;
 };
 
 /** Session summary stored at session end. */
@@ -114,6 +133,8 @@ export type HermesConfig = {
   maxMemories: number;
   autoExtract: boolean;
   contextLimit: number;
+  /** Token budget for context injection (default: 2000). Overrides contextLimit when set. */
+  tokenBudget: number;
   /** Operational mode: whisper, full, or off. */
   mode: HermesMode;
   /** Anthropic API key for LLM-powered extraction (optional). */
@@ -161,6 +182,7 @@ export const DEFAULT_CONFIG: HermesConfig = {
   maxMemories: 200,
   autoExtract: true,
   contextLimit: 10,
+  tokenBudget: 2000,
   mode: "whisper",
   sources: [],
   agents: [],
