@@ -8,8 +8,16 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as crypto from "crypto";
 import * as yaml from "yaml";
 import type { ExternalSource } from "./types";
+
+/** Atomic write: temp file + rename. */
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const tmpPath = `${filePath}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  await fs.writeFile(tmpPath, content, "utf-8");
+  await fs.rename(tmpPath, filePath);
+}
 import { loadConfig, saveConfig, getHermesDir } from "./config";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -75,7 +83,7 @@ export async function saveManifest(
 ): Promise<void> {
   manifest.updatedAt = new Date().toISOString();
   await fs.mkdir(hermesDir, { recursive: true });
-  await fs.writeFile(manifestPath(hermesDir), yaml.stringify(manifest), "utf-8");
+  await atomicWriteFile(manifestPath(hermesDir), yaml.stringify(manifest));
 }
 
 /** Initialize a discovery manifest for this repo. */
