@@ -164,6 +164,20 @@ export type { Span, SpanKind, SessionTrace } from "./observability";
 export { createVectorStore } from "./vector-store";
 export type { VectorStore, VectorSearchResult } from "./vector-store";
 
+// ── Embedding Cache ──────────────────────────────────────────
+export {
+  cacheKey,
+  loadEmbeddingCache,
+  saveEmbeddingCache,
+  pruneStaleEntries,
+  cosineSimilarity as embeddingCosineSimilarity,
+} from "./embedding-cache";
+export type { EmbeddingCacheEntry, EmbeddingCacheData } from "./embedding-cache";
+
+// ── Init (one-command setup) ──────────────────────────────────
+export { initHermes, registerHooks } from "./init";
+export type { InitOptions, InitResult } from "./init";
+
 // ── Structured Event Log ───────────────────────────────────────
 export {
   logEvent,
