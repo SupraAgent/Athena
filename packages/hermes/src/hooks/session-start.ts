@@ -9,6 +9,7 @@ import { getBranchFiles, branchBoost } from "../git-aging";
 import { runVerificationSweep, formatSweepResults } from "../verification";
 import { loadScorecards, analyzeTrend, formatTrend } from "../session-scoring";
 import { loadGlobalMemories, mergeGlobalWithLocal, loadGlobalConfig } from "../global-store";
+import { createVectorStore } from "../vector-store";
 
 /** SessionStart hook: load and rank memories, initialize thread, return context. */
 export async function onSessionStart(
@@ -75,6 +76,15 @@ export async function onSessionStart(
   const allMemories = sanitizeMemories([...mergedLocal, ...remoteMemories, ...channelMemories]);
   if (allMemories.length === 0) {
     return { context: "" };
+  }
+
+  // Populate vector store index (pre-computes embeddings if available)
+  // Non-blocking: failures fall back to BM25 in user-prompt hook
+  try {
+    const vectorStore = await createVectorStore(hermesDir);
+    await vectorStore.upsert(allMemories);
+  } catch {
+    // Vector store is best-effort — BM25 fallback always works
   }
 
   // Run verification sweep on memories with verify checks

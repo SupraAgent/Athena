@@ -12,6 +12,7 @@
 
 import * as fs from "fs/promises";
 import { extractMemories } from "./llm-extract";
+import { agentCurateMemories } from "./agent-curator";
 import {
   saveSessionSummary,
   pruneMemories,
@@ -63,25 +64,52 @@ async function main(): Promise<void> {
 
   if (!config.autoExtract) return;
 
-  // Extract memories (LLM or heuristic)
+  // Extract memories — try agentic curator first, fall back to extract+consolidate
   const apiKey = resolveAnthropicKey(config);
-  const result = await extractMemories(transcript, apiKey);
+  let saved = 0;
+  let methodUsed = "heuristic";
+  let summaryText = "";
+  let filesTouched: string[] = [];
+  let unfinished: string[] = [];
+  let decisionsMade: string[] = [];
 
-  // Smart consolidation — Mem0-style ADD/UPDATE/DELETE/NOOP per candidate
-  const pipeline = await smartConsolidate(
-    hermesDir, result.memories, sessionId, apiKey
-  );
-  const saved = pipeline.added + pipeline.updated;
+  if (apiKey) {
+    try {
+      // Agentic curator: single LLM call with tool_use for autonomous curation
+      const agentResult = await agentCurateMemories(hermesDir, transcript, sessionId, apiKey);
+      saved = agentResult.added + agentResult.updated;
+      methodUsed = agentResult.method;
+      summaryText = agentResult.summary;
+      filesTouched = agentResult.filesTouched;
+      unfinished = agentResult.unfinished;
+    } catch (agentErr) {
+      process.stderr.write(
+        `[hermes-worker] Agent curator failed, falling back: ${agentErr instanceof Error ? agentErr.message : String(agentErr)}\n`
+      );
+    }
+  }
+
+  // Fallback: existing extract+consolidate pipeline
+  if (saved === 0) {
+    const result = await extractMemories(transcript, apiKey);
+    const pipeline = await smartConsolidate(hermesDir, result.memories, sessionId, apiKey);
+    saved = pipeline.added + pipeline.updated;
+    methodUsed = result.method;
+    summaryText = result.summary;
+    filesTouched = result.filesTouched.slice(0, 20);
+    unfinished = result.unfinished;
+    decisionsMade = result.memories.filter((m) => m.type === "decision").map((m) => m.content);
+  }
 
   // Save session summary
   const summary: SessionSummary = {
     sessionId,
     startedAt,
     endedAt: new Date().toISOString(),
-    summary: result.summary,
-    filesTouched: result.filesTouched.slice(0, 20),
-    decisionsMade: result.memories.filter((m) => m.type === "decision").map((m) => m.content),
-    unfinished: result.unfinished,
+    summary: summaryText,
+    filesTouched,
+    decisionsMade,
+    unfinished,
   };
   await saveSessionSummary(hermesDir, summary);
 
@@ -138,7 +166,7 @@ async function main(): Promise<void> {
   }
 
   process.stderr.write(
-    `[hermes-worker] Extracted ${saved} memories (${result.method}) from session ${sessionId}\n`
+    `[hermes-worker] Extracted ${saved} memories (${methodUsed}) from session ${sessionId}\n`
   );
 }
 

@@ -10,6 +10,7 @@ import { semanticSearch } from "../semantic";
 import { sanitizeMemories, sanitizeContent } from "../sanitize";
 import { inferVerifyCheck } from "../verification";
 import { logEvent } from "../event-log";
+import { createVectorStore } from "../vector-store";
 
 /** UserPromptSubmit hook: scan prompt for keywords, inject relevant memories or diffs. */
 export async function onUserPrompt(
@@ -46,8 +47,22 @@ export async function onUserPrompt(
     return { context: "" };
   }
 
-  // Semantic search first, fall back to keyword search
-  let matches = semanticSearch(allMemories, prompt, config.contextLimit);
+  // Try vector store search first (embedding-based), fall back to BM25/keyword
+  let matches: Memory[] = [];
+  try {
+    const vectorStore = await createVectorStore(hermesDir);
+    if (vectorStore.backend !== "tfidf") {
+      await vectorStore.upsert(allMemories);
+      const results = await vectorStore.query(prompt, config.contextLimit);
+      matches = results.map((r) => r.memory);
+    }
+  } catch {
+    // Vector store unavailable — fall through to BM25
+  }
+
+  if (matches.length === 0) {
+    matches = semanticSearch(allMemories, prompt, config.contextLimit);
+  }
   if (matches.length === 0) {
     matches = searchMemories(allMemories, prompt, config.contextLimit);
   }

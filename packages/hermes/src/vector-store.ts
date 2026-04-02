@@ -12,6 +12,14 @@
 
 import type { Memory } from "./types";
 import { semanticSearch, buildIndex, findSimilar } from "./semantic";
+import {
+  cacheKey,
+  loadEmbeddingCache,
+  saveEmbeddingCache,
+  pruneStaleEntries,
+  cosineSimilarity as embeddingCosine,
+  type EmbeddingCacheEntry,
+} from "./embedding-cache";
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -21,8 +29,8 @@ export type VectorSearchResult = {
 };
 
 export type VectorStore = {
-  /** Backend in use: "chroma" | "tfidf" | "anthropic". */
-  backend: "chroma" | "tfidf" | "anthropic";
+  /** Backend in use: "local" | "chroma" | "tfidf" | "anthropic". */
+  backend: "local" | "chroma" | "tfidf" | "anthropic";
   /** Upsert memories into the store. */
   upsert: (memories: Memory[]) => Promise<void>;
   /** Search by query text. */
@@ -312,21 +320,159 @@ async function createAnthropicStore(apiKey: string): Promise<VectorStore | null>
   };
 }
 
+// ── Local Embedding Adapter (transformers.js / ONNX) ──────────
+
+/**
+ * Create a vector store backed by local ONNX embeddings via @xenova/transformers.
+ *
+ * Uses all-MiniLM-L6-v2 (~23MB, 384-dim) for fast local inference.
+ * Embeddings are cached to disk at .athena/hermes/embeddings.json so
+ * re-embedding only happens when memory content changes.
+ *
+ * Falls back to null if @xenova/transformers is not installed.
+ */
+async function createLocalEmbeddingStore(hermesDir: string): Promise<VectorStore | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let pipelineFn: any;
+  try {
+    // Dynamic import — @xenova/transformers is an optional peer dependency
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const transformers = require("@xenova/transformers");
+    pipelineFn = transformers.pipeline;
+  } catch {
+    return null;
+  }
+
+  const MODEL_NAME = "Xenova/all-MiniLM-L6-v2";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let embedder: any = null;
+
+  async function getEmbedder() {
+    if (!embedder) {
+      embedder = await pipelineFn("feature-extraction", MODEL_NAME);
+    }
+    return embedder;
+  }
+
+  // Verify the model loads before committing to this backend
+  try {
+    await getEmbedder();
+  } catch {
+    return null;
+  }
+
+  let _memories: Memory[] = [];
+  let _cache = await loadEmbeddingCache(hermesDir);
+
+  async function embed(text: string): Promise<number[]> {
+    const fn = await getEmbedder();
+    const output = await fn(text, { pooling: "mean", normalize: true });
+    return Array.from(output.data);
+  }
+
+  async function getOrComputeEmbedding(memoryId: string, content: string): Promise<number[]> {
+    const key = cacheKey(memoryId, content);
+    const cached = _cache.get(key);
+    if (cached) return cached.vector;
+
+    const text = `${content}`;
+    const vector = await embed(text);
+    _cache.set(key, { vector, cachedAt: new Date().toISOString() });
+    return vector;
+  }
+
+  return {
+    backend: "local",
+
+    async upsert(memories: Memory[]) {
+      _memories = memories;
+      if (memories.length === 0) return;
+
+      // Prune stale entries
+      const currentIds = new Set(memories.map((m) => m.id));
+      _cache = pruneStaleEntries(_cache, currentIds);
+
+      // Compute embeddings for any new/changed memories
+      for (const m of memories) {
+        await getOrComputeEmbedding(m.id, `${m.type}: ${m.content}`);
+      }
+
+      // Persist cache to disk
+      await saveEmbeddingCache(hermesDir, _cache);
+    },
+
+    async query(text: string, limit = 10): Promise<VectorSearchResult[]> {
+      if (_memories.length === 0) return [];
+
+      const queryVec = await embed(text);
+      const scored: VectorSearchResult[] = [];
+
+      for (const m of _memories) {
+        const key = cacheKey(m.id, `${m.type}: ${m.content}`);
+        const cached = _cache.get(key);
+        if (!cached) continue;
+
+        const score = embeddingCosine(queryVec, cached.vector);
+        if (score > 0) {
+          scored.push({ memory: m, score });
+        }
+      }
+
+      return scored
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+    },
+
+    async similar(target: Memory, threshold = 0.6): Promise<Memory[]> {
+      if (_memories.length === 0) return [];
+
+      const targetKey = cacheKey(target.id, `${target.type}: ${target.content}`);
+      let targetVec = _cache.get(targetKey)?.vector;
+      if (!targetVec) {
+        targetVec = await embed(`${target.type}: ${target.content}`);
+      }
+
+      const results: { memory: Memory; score: number }[] = [];
+
+      for (const m of _memories) {
+        if (m.id === target.id) continue;
+        const key = cacheKey(m.id, `${m.type}: ${m.content}`);
+        const cached = _cache.get(key);
+        if (!cached) continue;
+
+        const score = embeddingCosine(targetVec, cached.vector);
+        if (score >= threshold) {
+          results.push({ memory: m, score });
+        }
+      }
+
+      return results
+        .sort((a, b) => b.score - a.score)
+        .map((r) => r.memory);
+    },
+  };
+}
+
 // ── Factory ────────────────────────────────────────────────────
 
 /**
- * Create a vector store — priority: Anthropic embeddings > Chroma > TF-IDF.
+ * Create a vector store — priority: Voyage API > Local ONNX > Chroma > TF-IDF.
  *
- * Set VOYAGE_API_KEY env var to use Anthropic/Voyage embeddings.
+ * Set VOYAGE_API_KEY env var to use Voyage embeddings (best quality).
+ * Install @xenova/transformers for local ONNX embeddings (no API key needed).
  * Install chromadb to use Chroma. Otherwise falls back to BM25/TF-IDF.
  */
 export async function createVectorStore(hermesDir: string): Promise<VectorStore> {
-  // Try Anthropic/Voyage embeddings first
+  // Try Voyage embeddings first (highest quality, requires API key)
   const voyageKey = process.env.VOYAGE_API_KEY;
   if (voyageKey) {
     const anthropic = await createAnthropicStore(voyageKey);
     if (anthropic) return anthropic;
   }
+
+  // Try local ONNX embeddings (no API key, ~23MB model)
+  const local = await createLocalEmbeddingStore(hermesDir);
+  if (local) return local;
 
   // Then try Chroma
   const chroma = await createChromaStore(hermesDir);

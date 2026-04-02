@@ -33,7 +33,7 @@ import {
   deleteMemory,
 } from "./memory-store";
 import { loadConfig, saveConfig, getHermesDir, findRepoRoot, resolveMode } from "./config";
-import type { HookInput, HookOutput, MemoryType, HermesMode } from "./types";
+import type { HookInput, HookOutput, Memory, MemoryType, HermesMode } from "./types";
 import { MEMORY_BLOCK_LABELS } from "./types";
 import {
   ensureGlobalDir,
@@ -45,6 +45,7 @@ import {
   loadGlobalConfig,
   saveGlobalConfig,
 } from "./global-store";
+import { handleInit } from "./init";
 
 // Record process start time for stop hook fallback
 const PROCESS_START = new Date().toISOString();
@@ -539,6 +540,9 @@ async function main(): Promise<void> {
   if (!command) {
     console.error(
       "Usage: hermes <command>\n\n" +
+      "Setup:\n" +
+      "  init             Initialize Hermes in current project\n" +
+      "                   Options: --mode=whisper|full|off, --no-hooks, --force\n\n" +
       "Hook commands:\n" +
       "  session-start    Load memories for session context\n" +
       "  stop             Extract and save session memories\n" +
@@ -580,6 +584,8 @@ async function main(): Promise<void> {
   }
 
   switch (command) {
+    case "init":
+      return handleInit(args);
     case "search":
       return handleSearch(args);
     case "list":

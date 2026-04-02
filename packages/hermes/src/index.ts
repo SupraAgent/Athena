@@ -62,6 +62,7 @@ export {
   extractWithHeuristics,
   extractMemories,
   summarizeToolCalls,
+  truncateTranscript,
 } from "./llm-extract";
 export type { ExtractedMemory, ExtractionResult } from "./llm-extract";
 
@@ -162,6 +163,20 @@ export type { Span, SpanKind, SessionTrace } from "./observability";
 // ── Vector Store Adapter ───────────────────────────────────────
 export { createVectorStore } from "./vector-store";
 export type { VectorStore, VectorSearchResult } from "./vector-store";
+
+// ── Embedding Cache ──────────────────────────────────────────
+export {
+  cacheKey,
+  loadEmbeddingCache,
+  saveEmbeddingCache,
+  pruneStaleEntries,
+  cosineSimilarity as embeddingCosineSimilarity,
+} from "./embedding-cache";
+export type { EmbeddingCacheEntry, EmbeddingCacheData } from "./embedding-cache";
+
+// ── Init (one-command setup) ──────────────────────────────────
+export { initHermes, registerHooks } from "./init";
+export type { InitOptions, InitResult } from "./init";
 
 // ── Structured Event Log ───────────────────────────────────────
 export {
@@ -342,6 +357,10 @@ export {
 } from "./global-store";
 export type { GlobalStatus } from "./global-store";
 export type { GlobalHermesConfig, GlobalSectionConfig } from "./types";
+
+// ── Agentic Memory Curator ───────────────────────────────────────
+export { agentCurateMemories } from "./agent-curator";
+export type { CurationResult } from "./agent-curator";
 
 // ── Hooks ────────────────────────────────────────────────────────
 export { onSessionStart } from "./hooks/session-start";
