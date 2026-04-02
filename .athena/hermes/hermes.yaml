@@ -1,0 +1,19 @@
+# Hermes Configuration
+max_memories: 200
+auto_extract: true
+context_limit: 10
+mode: full
+sources: []
+agents: []
+channels:
+  - type: github
+    enabled: true
+    options:
+      repo: SupraAgent/Athena
+      max_issues: 10
+      max_prs: 10
+      priority_labels:
+        - P0
+        - P1
+        - bug
+    ttl_ms: 300000
