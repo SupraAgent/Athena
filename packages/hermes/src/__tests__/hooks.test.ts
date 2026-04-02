@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -13,17 +13,23 @@ import { DEFAULT_CONFIG } from "../types";
 
 let tmpDir: string;
 let hermesDir: string;
+let tmpGlobalDir: string;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-hooks-"));
+  tmpGlobalDir = await fs.mkdtemp(path.join(os.tmpdir(), "hermes-hooks-global-"));
   // Simulate a repo with .athena/hermes/
   hermesDir = path.join(tmpDir, ".athena", "hermes");
   await fs.mkdir(hermesDir, { recursive: true });
+  // Isolate global store so real ~/.hermes/ doesn't leak into tests
+  vi.stubEnv("HERMES_HOME", tmpGlobalDir);
   _resetCache();
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await fs.rm(tmpDir, { recursive: true, force: true });
+  await fs.rm(tmpGlobalDir, { recursive: true, force: true });
 });
 
 describe("onSessionStart", () => {

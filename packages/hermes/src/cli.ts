@@ -35,6 +35,16 @@ import {
 import { loadConfig, saveConfig, getHermesDir, findRepoRoot, resolveMode } from "./config";
 import type { HookInput, HookOutput, MemoryType, HermesMode } from "./types";
 import { MEMORY_BLOCK_LABELS } from "./types";
+import {
+  ensureGlobalDir,
+  loadGlobalMemories,
+  createGlobalMemory,
+  deleteGlobalMemory,
+  promoteToGlobal,
+  getGlobalStatus,
+  loadGlobalConfig,
+  saveGlobalConfig,
+} from "./global-store";
 
 // Record process start time for stop hook fallback
 const PROCESS_START = new Date().toISOString();
@@ -89,6 +99,57 @@ const TYPE_RELEVANCE: Record<MemoryType, number> = {
   "agent-heartbeat": 0.2,
 };
 
+// ── Flag Parsing ───────────────────────────────────────────────
+
+/** Extract a boolean flag from args, stripping only the first occurrence. */
+function extractFlag(args: string[], flag: string): { enabled: boolean; rest: string[] } {
+  const idx = args.indexOf(flag);
+  if (idx === -1) return { enabled: false, rest: args };
+  const rest = [...args];
+  rest.splice(idx, 1);
+  return { enabled: true, rest };
+}
+
+// ── Shared Display Helpers ─────────────────────────────────────
+
+function displayMemoryList(memories: Memory[], label: string): void {
+  if (memories.length === 0) {
+    console.log(`No ${label} stored.`);
+    return;
+  }
+  memories.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  const grouped: Record<string, Memory[]> = {};
+  for (const m of memories) {
+    (grouped[m.type] ??= []).push(m);
+  }
+  console.log(`${memories.length} ${label}:\n`);
+  for (const [type, mems] of Object.entries(grouped)) {
+    const typeLabel = MEMORY_BLOCK_LABELS[type as MemoryType] ?? type;
+    console.log(`  ${typeLabel} (${mems.length})`);
+    for (const m of mems) {
+      const age = timeAgo(m.updatedAt);
+      console.log(`    - ${m.content}`);
+      console.log(`      id: ${m.id}  |  ${age}`);
+    }
+    console.log();
+  }
+}
+
+function displaySearchResults(results: Memory[], label: string): void {
+  if (results.length === 0) {
+    console.log(`No matching ${label} found.`);
+    return;
+  }
+  console.log(`Found ${results.length} matching ${label}:\n`);
+  for (const m of results) {
+    const age = timeAgo(m.updatedAt);
+    const typeLabel = MEMORY_BLOCK_LABELS[m.type] ?? m.type;
+    console.log(`  [${typeLabel}] ${m.content}`);
+    console.log(`    id: ${m.id}  |  relevance: ${m.relevance}  |  ${age}`);
+    console.log();
+  }
+}
+
 // ── Memory Management Commands ──────────────────────────────────
 
 async function handleSaveMemory(args: string[], command: string): Promise<void> {
@@ -98,19 +159,27 @@ async function handleSaveMemory(args: string[], command: string): Promise<void> 
     process.exit(1);
   }
 
-  const content = args.join(" ").trim();
+  const { enabled: isGlobal, rest: contentArgs } = extractFlag(args, "--global");
+  const content = contentArgs.join(" ").trim();
   if (!content) {
-    console.error(`Usage: hermes ${command} <content>`);
+    console.error(`Usage: hermes ${command} [--global] <content>`);
     process.exit(1);
   }
 
-  const root = findRepoRoot();
-  const hermesDir = getHermesDir(root);
   const relevance = TYPE_RELEVANCE[type] ?? 0.7;
-  const mem = await createMemory(hermesDir, type, content, [], "cli", relevance);
   const label = MEMORY_BLOCK_LABELS[type] ?? type;
-  console.log(`Saved ${label}: ${mem.id}`);
-  console.log(`  "${content}"`);
+
+  if (isGlobal) {
+    const mem = await createGlobalMemory(type, content, [], "cli", relevance);
+    console.log(`Saved ${label} (global): ${mem.id}`);
+    console.log(`  "${content}"`);
+  } else {
+    const root = findRepoRoot();
+    const hermesDir = getHermesDir(root);
+    const mem = await createMemory(hermesDir, type, content, [], "cli", relevance);
+    console.log(`Saved ${label}: ${mem.id}`);
+    console.log(`  "${content}"`);
+  }
 }
 
 async function handleSearch(args: string[]): Promise<void> {
@@ -124,20 +193,7 @@ async function handleSearch(args: string[]): Promise<void> {
   const hermesDir = getHermesDir(root);
   const all = await loadMemories(hermesDir);
   const results = searchMemories(all, query, 10);
-
-  if (results.length === 0) {
-    console.log("No matching memories found.");
-    return;
-  }
-
-  console.log(`Found ${results.length} matching memories:\n`);
-  for (const m of results) {
-    const age = timeAgo(m.updatedAt);
-    const label = MEMORY_BLOCK_LABELS[m.type] ?? m.type;
-    console.log(`  [${label}] ${m.content}`);
-    console.log(`    id: ${m.id}  |  relevance: ${m.relevance}  |  ${age}`);
-    console.log();
-  }
+  displaySearchResults(results, "memories");
 }
 
 async function handleList(args: string[]): Promise<void> {
@@ -145,53 +201,34 @@ async function handleList(args: string[]): Promise<void> {
   const hermesDir = getHermesDir(root);
   let all = await loadMemories(hermesDir);
 
-  // Parse --type filter
   const typeArg = args.find((a) => a.startsWith("--type="));
   if (typeArg) {
     const filterType = typeArg.split("=")[1];
     all = all.filter((m) => m.type === filterType);
   }
 
-  if (all.length === 0) {
-    console.log("No memories stored.");
-    return;
-  }
-
-  // Sort by most recent first
-  all.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-  // Group by type
-  const grouped: Record<string, typeof all> = {};
-  for (const m of all) {
-    (grouped[m.type] ??= []).push(m);
-  }
-
-  console.log(`${all.length} memories:\n`);
-  for (const [type, mems] of Object.entries(grouped)) {
-    const label = MEMORY_BLOCK_LABELS[type as MemoryType] ?? type;
-    console.log(`  ${label} (${mems.length})`);
-    for (const m of mems) {
-      const age = timeAgo(m.updatedAt);
-      console.log(`    - ${m.content}`);
-      console.log(`      id: ${m.id}  |  ${age}`);
-    }
-    console.log();
-  }
+  displayMemoryList(all, "memories");
 }
 
 async function handleForget(args: string[]): Promise<void> {
-  const id = args[0]?.trim();
+  const { enabled: isGlobal, rest } = extractFlag(args, "--global");
+  const id = rest[0]?.trim();
   if (!id) {
-    console.error("Usage: hermes forget <memory-id>");
+    console.error("Usage: hermes forget [--global] <memory-id>");
     process.exit(1);
   }
 
-  const root = findRepoRoot();
-  const hermesDir = getHermesDir(root);
-  const deleted = await deleteMemory(hermesDir, id);
+  let deleted: boolean;
+  if (isGlobal) {
+    deleted = await deleteGlobalMemory(id);
+  } else {
+    const root = findRepoRoot();
+    const hermesDir = getHermesDir(root);
+    deleted = await deleteMemory(hermesDir, id);
+  }
 
   if (deleted) {
-    console.log(`Deleted memory: ${id}`);
+    console.log(`Deleted ${isGlobal ? "global " : ""}memory: ${id}`);
   } else {
     console.error(`Memory not found: ${id}`);
     process.exit(1);
@@ -254,6 +291,11 @@ async function handleStatus(): Promise<void> {
   console.log(`  Context limit:  ${config.contextLimit}`);
   console.log(`  Sources:        ${config.sources.length} external`);
   console.log(`  Agents:         ${config.agents.length} configured`);
+
+  // Global store info
+  const globalStatus = await getGlobalStatus();
+  console.log(`  Global store:   ${globalStatus.exists ? `${globalStatus.memoryCount} memories (${globalStatus.dir})` : "not initialized"}`);
+  console.log(`  Global enabled: ${config.global?.enabled !== false ? "yes" : "no"}`);
 }
 
 async function handleConsolidate(): Promise<void> {
@@ -386,6 +428,110 @@ function timeAgo(timestamp: string): string {
   return `${days}d ago`;
 }
 
+// ── Global Memory Commands ──────────────────────────────────────
+
+async function handleGlobal(args: string[]): Promise<void> {
+  const sub = args[0];
+  const subArgs = args.slice(1);
+
+  switch (sub) {
+    case "init": {
+      const dir = await ensureGlobalDir();
+      const config = await loadGlobalConfig();
+      await saveGlobalConfig(config);
+      console.log(`Global store initialized: ${dir}`);
+      return;
+    }
+
+    case "status": {
+      const status = await getGlobalStatus();
+      console.log("Global Store Status");
+      console.log("\u2500".repeat(40));
+      console.log(`  Directory:  ${status.dir}`);
+      console.log(`  Exists:     ${status.exists ? "yes" : "no"}`);
+      console.log(`  Enabled:    ${status.config.enabled ? "yes" : "no"}`);
+      console.log(`  Memories:   ${status.memoryCount} / ${status.config.maxMemories} max`);
+      console.log(`  Conflict:   ${status.config.conflictStrategy}`);
+      for (const [type, count] of Object.entries(status.typeCounts)) {
+        const label = MEMORY_BLOCK_LABELS[type as MemoryType] ?? type;
+        console.log(`    ${label}: ${count}`);
+      }
+      return;
+    }
+
+    case "list": {
+      let all = await loadGlobalMemories();
+      const typeArg = subArgs.find((a) => a.startsWith("--type="));
+      if (typeArg) {
+        const filterType = typeArg.split("=")[1];
+        all = all.filter((m) => m.type === filterType);
+      }
+      displayMemoryList(all, "global memories");
+      return;
+    }
+
+    case "search": {
+      const query = subArgs.join(" ").trim();
+      if (!query) {
+        console.error("Usage: hermes global search <query>");
+        process.exit(1);
+      }
+      const all = await loadGlobalMemories();
+      const results = searchMemories(all, query, 10);
+      displaySearchResults(results, "global memories");
+      return;
+    }
+
+    case "promote": {
+      const memoryId = subArgs[0]?.trim();
+      if (!memoryId) {
+        console.error("Usage: hermes global promote <memory-id>");
+        process.exit(1);
+      }
+      const root = findRepoRoot();
+      const hermesDir = getHermesDir(root);
+      const result = await promoteToGlobal(hermesDir, memoryId);
+      if (result) {
+        console.log(`Promoted to global: ${result.id}`);
+        console.log(`  "${result.content}"`);
+      } else {
+        console.error(`Memory not found: ${memoryId}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    case "demote": {
+      const memoryId = subArgs[0]?.trim();
+      if (!memoryId) {
+        console.error("Usage: hermes global demote <memory-id>");
+        process.exit(1);
+      }
+      const deleted = await deleteGlobalMemory(memoryId);
+      if (deleted) {
+        console.log(`Removed from global: ${memoryId}`);
+      } else {
+        console.error(`Global memory not found: ${memoryId}`);
+        process.exit(1);
+      }
+      return;
+    }
+
+    default:
+      console.error(
+        "Usage: hermes global <subcommand>\n\n" +
+        "Subcommands:\n" +
+        "  init              Initialize ~/.hermes/ directory\n" +
+        "  status            Show global store status\n" +
+        "  list [--type=X]   List global memories\n" +
+        "  search <query>    Search global memories\n" +
+        "  promote <id>      Copy a local memory to global store\n" +
+        "  demote <id>       Remove a memory from global store\n"
+      );
+      process.exit(1);
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -412,7 +558,16 @@ async function main(): Promise<void> {
       "  consolidate      Merge redundant memories\n" +
       "  age              Run git-aware memory aging\n" +
       "  evolve           Review trends, corrections, graduation candidates\n" +
-      "  status           Show Hermes status\n"
+      "  status           Show Hermes status\n\n" +
+      "Global memory commands:\n" +
+      "  global init      Initialize ~/.hermes/ directory\n" +
+      "  global status    Show global store status\n" +
+      "  global list      List global memories\n" +
+      "  global search    Search global memories\n" +
+      "  global promote   Copy local memory to global store\n" +
+      "  global demote    Remove memory from global store\n\n" +
+      "Add --global to save commands to store in global:\n" +
+      "  remember --global <text>\n"
     );
     process.exit(1);
   }
@@ -441,6 +596,8 @@ async function main(): Promise<void> {
       return handleEvolve();
     case "status":
       return handleStatus();
+    case "global":
+      return handleGlobal(args);
   }
 
   // Hook commands (JSON stdin/stdout protocol)

@@ -326,6 +326,23 @@ export type {
   ExternalChannel,
 } from "./channels";
 
+// ── Global Cross-Project Memory ──────────────────────────────────
+export {
+  getGlobalHermesDir,
+  ensureGlobalDir,
+  loadGlobalMemories,
+  saveGlobalMemory,
+  createGlobalMemory,
+  deleteGlobalMemory,
+  promoteToGlobal,
+  mergeGlobalWithLocal,
+  getGlobalStatus,
+  loadGlobalConfig,
+  saveGlobalConfig,
+} from "./global-store";
+export type { GlobalStatus } from "./global-store";
+export type { GlobalHermesConfig, GlobalSectionConfig } from "./types";
+
 // ── Hooks ────────────────────────────────────────────────────────
 export { onSessionStart } from "./hooks/session-start";
 export { onStop } from "./hooks/stop";

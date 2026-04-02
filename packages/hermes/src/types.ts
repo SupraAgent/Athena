@@ -13,7 +13,7 @@ export type MemoryType =
   | "agent-heartbeat";
 
 /** Memory scope — controls visibility and lifecycle. */
-export type MemoryScope = "user" | "agent" | "session";
+export type MemoryScope = "user" | "agent" | "session" | "global";
 
 /** Confidence lifecycle for memory graduation. */
 export type MemoryConfidence = "observed" | "confirmed" | "graduated";
@@ -141,6 +141,28 @@ export type ChannelConfigEntry = {
   ttlMs: number;
 };
 
+// ── Global Cross-Project Config ─────────────────────────────────
+
+/** Global cross-project Hermes configuration (~/.hermes/hermes.yaml). */
+export type GlobalHermesConfig = {
+  maxMemories: number;
+  /** How conflicts between global and local are resolved. */
+  conflictStrategy: "local-priority" | "global-priority" | "last-write-wins";
+  /** Whether cross-project memory is enabled. */
+  enabled: boolean;
+};
+
+/** Per-repo global memory settings (in .athena/hermes/hermes.yaml). */
+export type GlobalSectionConfig = {
+  enabled: boolean;
+  /** Override conflict strategy per-repo. */
+  conflictStrategy?: GlobalHermesConfig["conflictStrategy"];
+  /** Only import global memories with these tags. Empty = all. */
+  importTags?: string[];
+  /** Only export memories with these tags to global. Empty = all user-scope. */
+  exportTags?: string[];
+};
+
 // ── Configuration ───────────────────────────────────────────────
 
 /** Hermes configuration file (.athena/hermes/hermes.yaml). */
@@ -159,6 +181,8 @@ export type HermesConfig = {
   agents: AgentConfig[];
   /** External data channels for live context injection. */
   channels: ChannelConfigEntry[];
+  /** Cross-project global memory settings. */
+  global?: GlobalSectionConfig;
 };
 
 // ── Hooks ───────────────────────────────────────────────────────
@@ -204,6 +228,14 @@ export const DEFAULT_CONFIG: HermesConfig = {
   sources: [],
   agents: [],
   channels: [],
+  global: { enabled: true },
+};
+
+/** Default global store configuration. */
+export const DEFAULT_GLOBAL_CONFIG: GlobalHermesConfig = {
+  maxMemories: 100,
+  conflictStrategy: "last-write-wins",
+  enabled: true,
 };
 
 /** Human-readable labels for memory block types. */

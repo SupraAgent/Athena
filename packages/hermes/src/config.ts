@@ -84,6 +84,14 @@ export async function loadConfig(hermesDir: string): Promise<HermesConfig> {
         options: (c.options as Record<string, unknown>) ?? {},
         ttlMs: Number(c.ttl_ms) || 300000,
       })),
+      global: parsed?.global ? {
+        enabled: parsed.global.enabled !== false,
+        conflictStrategy: ["local-priority", "global-priority", "last-write-wins"].includes(parsed.global.conflict_strategy)
+          ? parsed.global.conflict_strategy
+          : undefined,
+        importTags: Array.isArray(parsed.global.import_tags) ? parsed.global.import_tags.map(String) : undefined,
+        exportTags: Array.isArray(parsed.global.export_tags) ? parsed.global.export_tags.map(String) : undefined,
+      } : DEFAULT_CONFIG.global,
     };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -122,6 +130,13 @@ export async function saveConfig(hermesDir: string, config: HermesConfig): Promi
       ttl_ms: c.ttlMs,
     })),
   };
+  if (config.global) {
+    const g: Record<string, unknown> = { enabled: config.global.enabled };
+    if (config.global.conflictStrategy) g.conflict_strategy = config.global.conflictStrategy;
+    if (config.global.importTags?.length) g.import_tags = config.global.importTags;
+    if (config.global.exportTags?.length) g.export_tags = config.global.exportTags;
+    doc.global = g;
+  }
   // SECURITY: Never write API keys to config files (could be committed to git).
   // API keys should be set via ANTHROPIC_API_KEY environment variable only.
   const content = `# Hermes Configuration\n${YAML.stringify(doc)}`;
