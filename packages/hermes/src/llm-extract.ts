@@ -25,7 +25,7 @@ export type ExtractionResult = {
 };
 
 /** Truncate a transcript to fit within token limits. Keep last N chars (conclusion matters more). */
-function truncateTranscript(transcript: string, maxChars = 12000): string {
+export function truncateTranscript(transcript: string, maxChars = 12000): string {
   if (transcript.length <= maxChars) return transcript;
   // Keep the first 2000 chars (intro context) and the last 10000 chars (conclusion)
   return (

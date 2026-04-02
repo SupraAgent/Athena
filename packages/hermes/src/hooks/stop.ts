@@ -53,24 +53,51 @@ export async function onStop(
     child.unref();
   } catch {
     // If spawn fails, fall back to inline processing
-    const { extractMemories } = await import("../llm-extract");
     const { resolveAnthropicKey } = await import("../config");
     const { saveSessionSummary, pruneMemories } = await import("../memory-store");
-    const { smartConsolidate } = await import("../mem0-pipeline");
 
     const apiKey = resolveAnthropicKey(config);
-    const result = await extractMemories(transcript, apiKey);
-    const pipeline = await smartConsolidate(hermesDir, result.memories, sid, apiKey);
-    const saved = pipeline.added + pipeline.updated;
+    let saved = 0;
+    let summaryText = "";
+    let filesTouched: string[] = [];
+    let unfinished: string[] = [];
+    let decisionsMade: string[] = [];
+
+    // Try agentic curator first
+    if (apiKey) {
+      try {
+        const { agentCurateMemories } = await import("../agent-curator");
+        const agentResult = await agentCurateMemories(hermesDir, transcript, sid, apiKey);
+        saved = agentResult.added + agentResult.updated;
+        summaryText = agentResult.summary;
+        filesTouched = agentResult.filesTouched;
+        unfinished = agentResult.unfinished;
+      } catch {
+        // Fall through to legacy pipeline
+      }
+    }
+
+    // Fallback: extract+consolidate
+    if (saved === 0) {
+      const { extractMemories } = await import("../llm-extract");
+      const { smartConsolidate } = await import("../mem0-pipeline");
+      const result = await extractMemories(transcript, apiKey);
+      const pipeline = await smartConsolidate(hermesDir, result.memories, sid, apiKey);
+      saved = pipeline.added + pipeline.updated;
+      summaryText = result.summary;
+      filesTouched = result.filesTouched.slice(0, 20);
+      unfinished = result.unfinished;
+      decisionsMade = result.memories.filter((m) => m.type === "decision").map((m) => m.content);
+    }
 
     await saveSessionSummary(hermesDir, {
       sessionId: sid,
       startedAt,
       endedAt: new Date().toISOString(),
-      summary: result.summary,
-      filesTouched: result.filesTouched.slice(0, 20),
-      decisionsMade: result.memories.filter((m) => m.type === "decision").map((m) => m.content),
-      unfinished: result.unfinished,
+      summary: summaryText,
+      filesTouched,
+      decisionsMade,
+      unfinished,
     });
 
     if (config.maxMemories > 0) {

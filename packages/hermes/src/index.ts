@@ -62,6 +62,7 @@ export {
   extractWithHeuristics,
   extractMemories,
   summarizeToolCalls,
+  truncateTranscript,
 } from "./llm-extract";
 export type { ExtractedMemory, ExtractionResult } from "./llm-extract";
 
@@ -342,6 +343,10 @@ export {
 } from "./global-store";
 export type { GlobalStatus } from "./global-store";
 export type { GlobalHermesConfig, GlobalSectionConfig } from "./types";
+
+// ── Agentic Memory Curator ───────────────────────────────────────
+export { agentCurateMemories } from "./agent-curator";
+export type { CurationResult } from "./agent-curator";
 
 // ── Hooks ────────────────────────────────────────────────────────
 export { onSessionStart } from "./hooks/session-start";
