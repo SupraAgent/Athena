@@ -1,0 +1,10 @@
+# Hermes Memory — decision
+id: mem_mncv7mpc_l3tpum_1
+type: decision
+content: Removed Paperclip dependency — porting agent orchestration natively
+  into Hermes + Builder
+tags: []
+created_at: 2026-03-30T07:27:02.064Z
+updated_at: 2026-03-30T07:27:02.064Z
+source: cli
+relevance: 0.8

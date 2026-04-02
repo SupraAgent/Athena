@@ -1,0 +1,9 @@
+# Hermes Memory — fact
+id: mem_mncv7n64_t9xhhl_1
+type: fact
+content: Hermes stores memories in .athena/hermes/memories/ as JSON files
+tags: []
+created_at: 2026-03-30T07:27:02.668Z
+updated_at: 2026-03-30T07:27:02.668Z
+source: cli
+relevance: 0.8
