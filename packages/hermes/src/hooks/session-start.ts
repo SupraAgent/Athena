@@ -8,6 +8,7 @@ import { sanitizeMemories } from "../sanitize";
 import { getBranchFiles, branchBoost } from "../git-aging";
 import { runVerificationSweep, formatSweepResults } from "../verification";
 import { loadScorecards, analyzeTrend, formatTrend } from "../session-scoring";
+import { loadGlobalMemories, mergeGlobalWithLocal, loadGlobalConfig } from "../global-store";
 
 /** SessionStart hook: load and rank memories, initialize thread, return context. */
 export async function onSessionStart(
@@ -51,8 +52,27 @@ export async function onSessionStart(
     }
   }
 
+  // Load and merge global cross-project memories with conflict resolution
+  let mergedLocal = localMemories;
+  if (config.global?.enabled !== false) {
+    try {
+      let globalMemories = await loadGlobalMemories();
+      const importTags = config.global?.importTags;
+      if (importTags?.length) {
+        globalMemories = globalMemories.filter((m) => m.tags.some((t) => importTags.includes(t)));
+      }
+      if (globalMemories.length > 0) {
+        const globalConfig = await loadGlobalConfig();
+        const strategy = config.global?.conflictStrategy ?? globalConfig.conflictStrategy;
+        mergedLocal = mergeGlobalWithLocal(localMemories, globalMemories, strategy);
+      }
+    } catch {
+      // Global store not initialized — silent
+    }
+  }
+
   // Sanitize all memories before injection
-  const allMemories = sanitizeMemories([...localMemories, ...remoteMemories, ...channelMemories]);
+  const allMemories = sanitizeMemories([...mergedLocal, ...remoteMemories, ...channelMemories]);
   if (allMemories.length === 0) {
     return { context: "" };
   }
