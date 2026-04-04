@@ -163,6 +163,24 @@ export type GlobalSectionConfig = {
   exportTags?: string[];
 };
 
+// ── AutoResearch Config ────────────────────────────────────────
+
+/** AutoResearch configuration (nested under HermesConfig.research). */
+export type ResearchConfig = {
+  /** Whether autoresearch is enabled. Default: false. */
+  enabled: boolean;
+  /** Number of sessions to observe per experiment. Default: 5. */
+  sessionWindow: number;
+  /** Minimum improvement delta to keep an experiment. Default: 0.02. */
+  minImprovement: number;
+  /** Max experiments per day (prevents runaway). Default: 3. */
+  maxExperimentsPerDay: number;
+  /** Minimum sessions of baseline data before first experiment. Default: 5. */
+  minBaselineSessions: number;
+  /** Cooldown sessions between experiments. Default: 1. */
+  cooldownSessions: number;
+};
+
 // ── Configuration ───────────────────────────────────────────────
 
 /** Hermes configuration file (.athena/hermes/hermes.yaml). */
@@ -183,6 +201,8 @@ export type HermesConfig = {
   channels: ChannelConfigEntry[];
   /** Cross-project global memory settings. */
   global?: GlobalSectionConfig;
+  /** AutoResearch self-improvement loop settings. */
+  research?: ResearchConfig;
 };
 
 // ── Hooks ───────────────────────────────────────────────────────

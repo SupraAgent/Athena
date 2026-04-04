@@ -104,9 +104,33 @@ export async function onStop(
       await pruneMemories(hermesDir, config.maxMemories);
     }
 
+    // Run autoresearch loop (non-blocking, best-effort)
+    await runResearchLoop(hermesDir, sid, config);
+
     return { context: "", memoriesSaved: saved };
   }
 
   // Worker spawned successfully — exit immediately
   return { context: "", memoriesSaved: 0 };
+}
+
+/**
+ * Run the autoresearch loop if enabled.
+ * Always best-effort — never fails the stop hook.
+ */
+async function runResearchLoop(
+  hermesDir: string,
+  sessionId: string,
+  config: Awaited<ReturnType<typeof loadConfig>>
+): Promise<void> {
+  if (!config.research?.enabled) return;
+
+  try {
+    const { onSessionComplete } = await import("../autoresearch/loop");
+    const { resolveAnthropicKey } = await import("../config");
+    const apiKey = resolveAnthropicKey(config);
+    await onSessionComplete(hermesDir, sessionId, config.research, apiKey);
+  } catch {
+    // AutoResearch is best-effort — never block the stop hook
+  }
 }

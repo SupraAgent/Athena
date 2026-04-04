@@ -533,6 +533,92 @@ async function handleGlobal(args: string[]): Promise<void> {
   }
 }
 
+// ── AutoResearch Commands ──────────────────────────────────────
+
+async function handleResearch(args: string[]): Promise<void> {
+  const sub = args[0];
+  const root = findRepoRoot();
+  const hermesDir = getHermesDir(root);
+
+  switch (sub) {
+    case "status": {
+      const { loadResearchLog } = await import("./autoresearch/experiment-store");
+      const { formatResearchStatus } = await import("./autoresearch/report");
+      const log = await loadResearchLog(hermesDir);
+
+      const status = formatResearchStatus(log);
+      if (status) {
+        console.log(status);
+      } else {
+        console.log("AutoResearch: no experiments run yet.");
+      }
+
+      const config = await loadConfig(hermesDir);
+      console.log(`\nEnabled: ${config.research?.enabled ? "yes" : "no"}`);
+      if (config.research) {
+        console.log(`Session window: ${config.research.sessionWindow}`);
+        console.log(`Min improvement: ${config.research.minImprovement}`);
+        console.log(`Max experiments/day: ${config.research.maxExperimentsPerDay}`);
+      }
+      return;
+    }
+
+    case "history": {
+      const { loadResearchLog } = await import("./autoresearch/experiment-store");
+      const { formatExperimentHistory } = await import("./autoresearch/report");
+      const log = await loadResearchLog(hermesDir);
+      console.log(formatExperimentHistory(log));
+      return;
+    }
+
+    case "report": {
+      const { generateFullReport } = await import("./autoresearch/report");
+      console.log(await generateFullReport(hermesDir));
+      return;
+    }
+
+    case "start": {
+      const config = await loadConfig(hermesDir);
+      const { DEFAULT_RESEARCH_CONFIG } = await import("./autoresearch/types");
+      config.research = {
+        ...DEFAULT_RESEARCH_CONFIG,
+        enabled: true,
+        ...config.research,
+      };
+      config.research.enabled = true;
+      await saveConfig(hermesDir, config);
+      console.log("AutoResearch enabled.");
+      console.log(`  Session window: ${config.research.sessionWindow}`);
+      console.log(`  Min improvement: ${config.research.minImprovement}`);
+      console.log(`  Max experiments/day: ${config.research.maxExperimentsPerDay}`);
+      console.log("\nThe research loop will run automatically after each session.");
+      return;
+    }
+
+    case "stop": {
+      const config = await loadConfig(hermesDir);
+      if (config.research) {
+        config.research.enabled = false;
+      }
+      await saveConfig(hermesDir, config);
+      console.log("AutoResearch disabled.");
+      return;
+    }
+
+    default:
+      console.error(
+        "Usage: hermes research <subcommand>\n\n" +
+        "Subcommands:\n" +
+        "  status     Show current research status and config\n" +
+        "  history    Show experiment history table\n" +
+        "  report     Generate full research report\n" +
+        "  start      Enable autoresearch loop\n" +
+        "  stop       Disable autoresearch loop\n"
+      );
+      process.exit(1);
+  }
+}
+
 // ── Main ────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -563,6 +649,12 @@ async function main(): Promise<void> {
       "  age              Run git-aware memory aging\n" +
       "  evolve           Review trends, corrections, graduation candidates\n" +
       "  status           Show Hermes status\n\n" +
+      "AutoResearch commands:\n" +
+      "  research status  Show research status and config\n" +
+      "  research history Show experiment history\n" +
+      "  research report  Full research report\n" +
+      "  research start   Enable autoresearch loop\n" +
+      "  research stop    Disable autoresearch loop\n\n" +
       "Global memory commands:\n" +
       "  global init      Initialize ~/.hermes/ directory\n" +
       "  global status    Show global store status\n" +
@@ -604,6 +696,8 @@ async function main(): Promise<void> {
       return handleStatus();
     case "global":
       return handleGlobal(args);
+    case "research":
+      return handleResearch(args);
   }
 
   // Hook commands (JSON stdin/stdout protocol)
