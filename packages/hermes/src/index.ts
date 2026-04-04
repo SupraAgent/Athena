@@ -8,6 +8,7 @@ export type {
   SessionSummary,
   HermesConfig,
   HermesMode,
+  ResearchConfig,
   ExternalSource,
   AgentSchedule,
   AgentConfig,
@@ -367,3 +368,37 @@ export { onSessionStart } from "./hooks/session-start";
 export { onStop } from "./hooks/stop";
 export { onPreToolUse } from "./hooks/pre-tool-use";
 export { onUserPrompt } from "./hooks/user-prompt";
+
+// ── AutoResearch — Self-Improving Agent Loop ───────────────────
+export {
+  computeEffectiveness,
+  compareScores,
+  loadResearchLog,
+  saveResearchLog,
+  createExperiment,
+  recordSessionObservation,
+  completeExperiment,
+  updateBaseline,
+  getActiveExperiment,
+  generateHypotheses,
+  generateHypothesesHeuristic,
+  prioritizeHypotheses,
+  onSessionComplete as onResearchSessionComplete,
+  applyExperiment,
+  revertExperiment,
+  formatResearchStatus,
+  formatExperimentHistory,
+  formatEffectivenessTrend,
+  generateFullReport,
+  DEFAULT_RESEARCH_CONFIG,
+} from "./autoresearch";
+export type {
+  EffectivenessScore,
+  ScoreComparison,
+  MemoryDelta,
+  Hypothesis,
+  Experiment,
+  ResearchLog,
+  ResearchEventType,
+  LoopResult,
+} from "./autoresearch";

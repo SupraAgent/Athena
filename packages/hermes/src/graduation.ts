@@ -159,8 +159,16 @@ export async function findGraduationCandidates(
         sessionCount >= 10 &&
         mem.verify != null;
 
-      if (isCandidate) {
-        const reason = buildReason(mem, correctionCount, sessionCount);
+      // Evidence-based fast-track: memories from kept autoresearch experiments
+      // can graduate with lower thresholds (they've been empirically validated)
+      const isResearchValidated = await isExperimentValidated(hermesDir, mem.id);
+      const isFastTrack =
+        isResearchValidated &&
+        mem.relevance >= 0.8 &&
+        sessionCount >= 5;
+
+      if (isCandidate || isFastTrack) {
+        const reason = buildReason(mem, correctionCount, sessionCount, isFastTrack);
         candidates.push({
           memoryId: mem.id,
           content: mem.content,
@@ -174,7 +182,9 @@ export async function findGraduationCandidates(
 
         await logEvent(hermesDir, "graduation.candidate", sessionId, {
           memoryId: mem.id,
-          transition: "confirmed → graduation candidate",
+          transition: isFastTrack
+            ? "confirmed → graduation candidate (research fast-track)"
+            : "confirmed → graduation candidate",
         });
       }
     }
@@ -183,13 +193,32 @@ export async function findGraduationCandidates(
   return { candidates, alreadyGraduated, confirmations };
 }
 
-function buildReason(mem: Memory, correctionCount: number, sessionCount: number): string {
+function buildReason(mem: Memory, correctionCount: number, sessionCount: number, fastTrack = false): string {
   const parts: string[] = [];
+  if (fastTrack) parts.push("research-validated");
   if (correctionCount >= 2) parts.push(`corrected ${correctionCount}x`);
   if (mem.relevance >= 0.9) parts.push(`relevance ${mem.relevance}`);
   if (mem.verify) parts.push("has verify check");
   parts.push(`${sessionCount} sessions active`);
   return parts.join(", ");
+}
+
+/**
+ * Check if a memory was part of a kept autoresearch experiment.
+ * Memories validated by experiments have empirical evidence of effectiveness.
+ */
+async function isExperimentValidated(hermesDir: string, memoryId: string): Promise<boolean> {
+  try {
+    const { loadResearchLog } = await import("./autoresearch/experiment-store");
+    const log = await loadResearchLog(hermesDir);
+    return log.experiments.some(
+      (exp) =>
+        exp.status === "kept" &&
+        exp.hypothesis.changes.some((c) => c.memoryId === memoryId)
+    );
+  } catch {
+    return false;
+  }
 }
 
 // ── Graduation Actions ─────────────────────────────────────────

@@ -100,8 +100,21 @@ export async function onSessionStart(
     // Trend is non-critical
   }
 
-  // Combine preamble blocks (violations + trend)
-  const preambleParts = [violationBlock, trendLine].filter(Boolean);
+  // Load autoresearch status (non-blocking)
+  let researchLine = "";
+  if (config.research?.enabled) {
+    try {
+      const { loadResearchLog } = await import("../autoresearch/experiment-store");
+      const { formatResearchStatus } = await import("../autoresearch/report");
+      const researchLog = await loadResearchLog(hermesDir);
+      researchLine = formatResearchStatus(researchLog);
+    } catch {
+      // AutoResearch status is non-critical
+    }
+  }
+
+  // Combine preamble blocks (violations + trend + research)
+  const preambleParts = [violationBlock, trendLine, researchLine].filter(Boolean);
   const preamble = preambleParts.join("\n\n");
 
   // Get branch context for relevance boosting
