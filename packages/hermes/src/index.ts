@@ -391,6 +391,30 @@ export {
   formatEffectivenessTrend,
   generateFullReport,
   DEFAULT_RESEARCH_CONFIG,
+  // Retrieval tuning
+  TUNABLE_PARAMS,
+  loadTuningOverrides,
+  saveTuningOverrides,
+  getEffectiveValue,
+  getAllEffectiveValues,
+  generateTuningHypothesis,
+  applyTuningChange,
+  revertTuningChange,
+  formatTuningStatus,
+  // Cost tracking
+  estimateCost,
+  trackLLMCall,
+  loadCostRecords,
+  checkBudget,
+  getCostSummary,
+  formatCostSummary,
+  DEFAULT_COST_BUDGET,
+  // A/B testing
+  assignGroup,
+  createABExperiment,
+  recordABObservation,
+  evaluateAB,
+  formatABResult,
 } from "./autoresearch";
 export type {
   EffectivenessScore,
@@ -401,4 +425,12 @@ export type {
   ResearchLog,
   ResearchEventType,
   LoopResult,
+  TunableParam,
+  TuningOverrides,
+  CostRecord,
+  CostSummary,
+  CostBudget,
+  ABGroup,
+  ABExperiment,
+  ABResult,
 } from "./autoresearch";
